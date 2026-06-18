@@ -27,12 +27,12 @@ jobs:
       - name: Create ZIP
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/studio-inventory-win -DestinationPath dist/Studio-Inventory-v${{ github.event.release.tag_name }}-Windows.zip
+          Compress-Archive -Path dist/studio-inventory-win -DestinationPath dist/Studio-Inventory-${{ github.event.release.tag_name }}-Windows.zip
 
       - name: Upload Windows asset
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Studio-Inventory-v${{ github.event.release.tag_name }}-Windows.zip
+          files: dist/Studio-Inventory-${{ github.event.release.tag_name }}-Windows.zip
 
   build-mac:
     runs-on: macos-latest
@@ -53,7 +53,7 @@ jobs:
       - name: Create ZIP
         run: |
           cd dist
-          zip -r "Studio-Inventory-v${{ github.event.release.tag_name }}-macOS.zip" studio-inventory-mac
+          zip -r "Studio-Inventory-${{ github.event.release.tag_name }}-macOS.zip" studio-inventory-mac
 
       - name: Create DMG
         run: |
@@ -66,5 +66,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/Studio-Inventory-v${{ github.event.release.tag_name }}-macOS.zip
-            dist/Studio-Inventory-v${{ github.event.release.tag_name }}-macOS.dmg
+            dist/Studio-Inventory-${{ github.event.release.tag_name }}-macOS.zip
+            dist/Studio-Inventory-${{ github.event.release.tag_name }}-macOS.dmg

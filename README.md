@@ -2,6 +2,7 @@
 
 **Local inventory management for physical musical instruments and audio hardware** — built for home studios, optimized for Intel NUC deployment and fullscreen use on large 4K TVs.
 
+[![CI](https://github.com/TerkWerX/STUDIO-INVENTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/TerkWerX/STUDIO-INVENTORY/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 

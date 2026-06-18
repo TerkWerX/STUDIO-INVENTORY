@@ -1,7 +1,7 @@
 import { api } from './api.js';
 import { debounce, showToast, showModal, buildDriverSearchUrl, buildValueEstimateUrl } from './utils.js';
 import { renderDashboard } from './views/dashboard.js';
-import { renderInventory, renderItemDetail, bindLightbox } from './views/inventory.js';
+import { renderInventory, renderItemDetail, bindLightbox, bindPhotoDropZone, filterImageFiles } from './views/inventory.js';
 import { renderItemForm, collectFormData, bindAutoEstimate, bindBrandSuggest } from './views/item-form.js';
 import { renderBrandsPage, renderBrandItems } from './views/brands.js';
 import { renderReports, renderInsurance, generatePdf } from './views/reports.js';
@@ -185,6 +185,14 @@ async function navigate(view, params = {}) {
         const item = await api.item(params.id || state.selectedItemId);
         container.innerHTML = renderItemDetail(item);
         bindDetailEvents(item);
+        bindPhotoDropZone(container, item, {
+          onUpload: async (itemId, files) => {
+            await api.uploadPhotos(itemId, files);
+            showToast(`${files.length} photo(s) uploaded`, 'success');
+            navigate('item-detail', { id: itemId });
+          },
+          onError: (msg) => showToast(msg, 'error')
+        });
         bindLightbox(item.photos || []);
         break;
 
@@ -415,13 +423,14 @@ function bindDetailEvents(item) {
   });
 
   container.querySelector('[data-action="upload-photos"]')?.addEventListener('change', async (e) => {
-    const files = [...e.target.files];
-    if (!files.length) return;
+    const files = filterImageFiles(e.target.files);
+    if (!files.length) return showToast('No image files selected', 'error');
     try {
       await api.uploadPhotos(item.id, files);
       showToast(`${files.length} photo(s) uploaded`, 'success');
       navigate('item-detail', { id: item.id });
     } catch (err) { showToast(err.message, 'error'); }
+    e.target.value = '';
   });
 
   container.querySelector('[data-action="upload-manual"]')?.addEventListener('change', async (e) => {

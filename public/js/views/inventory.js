@@ -134,13 +134,18 @@ export function renderItemDetail(item) {
     </div>
     ` : ''}
 
-    <div class="card">
+    <div class="card photo-drop-zone" data-photo-drop-zone data-item-id="${item.id}">
+      <div class="photo-drop-overlay" aria-hidden="true">
+        <span class="photo-drop-overlay-icon">+</span>
+        <span class="photo-drop-overlay-text">Drop photos to upload</span>
+      </div>
       <div class="card-header">
         <h3 class="section-title">Photos</h3>
         <label class="btn btn-secondary" style="cursor:pointer">
           Add Photos<input type="file" accept="image/*" multiple data-action="upload-photos" data-id="${item.id}" hidden>
         </label>
       </div>
+      <p class="photo-drop-hint text-muted-sm">Drag and drop images here, or use <strong>Add Photos</strong></p>
       ${photos.length ? `
         <div class="photo-gallery">
           ${photos.map((p, i) => `
@@ -150,7 +155,7 @@ export function renderItemDetail(item) {
             </button>
           `).join('')}
         </div>
-      ` : `<p class="text-muted">No photos yet. Upload images from all angles for insurance documentation.</p>`}
+      ` : `<p class="text-muted photo-drop-empty">No photos yet. Drop images here or upload from all angles for insurance documentation.</p>`}
     </div>
 
     <div class="card">
@@ -263,6 +268,76 @@ export function renderItemDetail(item) {
     </div>
     ` : ''}
   `;
+}
+
+export function filterImageFiles(fileList) {
+  return [...fileList].filter(f => f.type.startsWith('image/'));
+}
+
+export function bindPhotoDropZone(container, item, { onUpload, onError }) {
+  const zone = container.querySelector('[data-photo-drop-zone]');
+  if (!zone) return;
+
+  let dragDepth = 0;
+
+  const hasFiles = (e) =>
+    [...(e.dataTransfer?.types || [])].includes('Files');
+
+  const setActive = (active) => {
+    zone.classList.toggle('photo-drop-active', active);
+  };
+
+  zone.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    setActive(true);
+  });
+
+  zone.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setActive(true);
+  });
+
+  zone.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) setActive(false);
+  });
+
+  const blockFileDrag = (e) => {
+    if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault();
+  };
+  const blockFileDropOutside = (e) => {
+    if ([...(e.dataTransfer?.types || [])].includes('Files') && !zone.contains(e.target)) {
+      e.preventDefault();
+    }
+  };
+  document.addEventListener('dragover', blockFileDrag);
+  document.addEventListener('drop', blockFileDropOutside);
+
+  zone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    setActive(false);
+
+    const files = filterImageFiles(e.dataTransfer?.files || []);
+    if (!files.length) {
+      onError?.('No image files detected — use JPG, PNG, WebP, etc.');
+      return;
+    }
+
+    zone.classList.add('photo-drop-uploading');
+    try {
+      await onUpload(item.id, files);
+    } catch (err) {
+      onError?.(err.message);
+    } finally {
+      zone.classList.remove('photo-drop-uploading');
+    }
+  });
 }
 
 export function bindLightbox(photos) {

@@ -184,8 +184,14 @@ function safeJsonParse(str) {
 function enrichItem(item) {
   if (!item) return null;
   const attachments = getAttachmentsForItem(item.id);
+  let brand_logo_path = '';
+  if (item.brand) {
+    const brandRow = db.prepare('SELECT logo_path FROM brands WHERE name = ? COLLATE NOCASE').get(item.brand);
+    brand_logo_path = brandRow?.logo_path || '';
+  }
   return {
     ...item,
+    brand_logo_path,
     update_checks_enabled: item.update_checks_enabled !== 0,
     tags: getTagsForItem(item.id),
     attachments,

@@ -753,6 +753,75 @@ tbody tr:hover { background: var(--bg-hover); }
   .item-card-photo { height: 240px; }
 }
 
+/* Item detail brand hero */
+.item-brand-hero {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 1.75rem 2rem;
+  margin-bottom: 1.5rem;
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.item-brand-hero-logo {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 200px;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-lg);
+}
+.item-brand-hero .brand-logo-wrap {
+  width: 220px;
+  max-width: 220px;
+  height: 120px;
+}
+.item-brand-hero .brand-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.4));
+}
+.item-brand-hero .brand-logo-fallback.lg {
+  width: 100px;
+  height: 100px;
+  font-size: var(--font-2xl);
+}
+.item-brand-hero-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.item-brand-hero-label {
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.item-brand-hero-name {
+  font-size: var(--font-xl);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.item-brand-hero-model {
+  font-size: var(--font-lg);
+}
+
+@media (min-width: 2560px) {
+  .item-brand-hero { padding: 2.25rem 2.5rem; gap: 2.5rem; }
+  .item-brand-hero .brand-logo-wrap {
+    width: 300px;
+    max-width: 300px;
+    height: 160px;
+  }
+  .item-brand-hero-name { font-size: var(--font-2xl); }
+}
+
 /* Owner Labels */
 .label-settings-grid { max-width: 900px; }
 .label-dymo-note { margin: 1rem 0 0; }

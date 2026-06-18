@@ -1,4 +1,4 @@
-import { escapeHtml, formatCurrency, formatDate, fileUrl } from './utils.js';
+import { escapeHtml, formatCurrency, formatDate, fileUrl, brandLogoHtml } from './utils.js';
 
 const root = document.getElementById('scan-root');
 const itemId = new URLSearchParams(window.location.search).get('id');
@@ -16,13 +16,25 @@ function renderItem(item) {
   const editUrl = `/?view=item-form&edit=${item.id}`;
   const detailUrl = `/?view=item-detail&id=${item.id}`;
 
+  const brandBanner = item.brand ? `
+    <div class="scan-brand-banner">
+      ${brandLogoHtml({ name: item.brand, logo_path: item.brand_logo_path }, 'scan-brand-logo', { large: true })}
+      <div>
+        <span class="scan-brand-label">Manufacturer</span>
+        <strong>${escapeHtml(item.brand)}</strong>
+        ${item.model ? `<span class="text-muted-sm">${escapeHtml(item.model)}</span>` : ''}
+      </div>
+    </div>
+  ` : '';
+
   return `
     <article class="scan-card">
+      ${brandBanner}
       ${photo ? `<div class="scan-photo"><img src="${fileUrl(photo.relative_path)}" alt=""></div>` : ''}
       <div class="scan-card-body">
         <h1 class="scan-title">${escapeHtml(item.name)}</h1>
         ${item.common_name ? `<p class="scan-subtitle">${escapeHtml(item.common_name)}</p>` : ''}
-        <p class="scan-meta">${escapeHtml(item.brand)} ${escapeHtml(item.model)}</p>
+        ${!item.brand && item.model ? `<p class="scan-meta">${escapeHtml(item.model)}</p>` : ''}
 
         <dl class="scan-facts">
           ${item.serial_number ? `<div><dt>Serial</dt><dd>${escapeHtml(item.serial_number)}</dd></div>` : ''}

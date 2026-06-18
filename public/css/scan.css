@@ -38,6 +38,37 @@
   overflow: hidden;
 }
 
+.scan-brand-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+.scan-brand-banner .brand-logo-wrap {
+  width: 120px;
+  height: 72px;
+  flex-shrink: 0;
+}
+.scan-brand-banner .brand-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.scan-brand-banner > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.scan-brand-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .scan-photo {
   height: 220px;
   background: var(--bg-tertiary);

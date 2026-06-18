@@ -1,5 +1,5 @@
 import {
-  formatCurrency, formatDate, escapeHtml, fileUrl, isDriverCategory,
+  formatCurrency, formatDate, escapeHtml, fileUrl, brandLogoHtml, isDriverCategory,
   buildDriverSearchUrl, buildValueEstimateUrl, openLightbox
 } from '../utils.js';
 
@@ -104,6 +104,10 @@ export function renderItemDetail(item) {
   const software = item.software || [];
   const showDriverSection = isDriverCategory(item.category) || software.length > 0;
 
+  const brandDisplay = item.brand
+    ? brandLogoHtml({ name: item.brand, logo_path: item.brand_logo_path }, 'item-brand-logo', { large: true })
+    : '';
+
   return `
     <div class="detail-header">
       <div>
@@ -118,6 +122,17 @@ export function renderItemDetail(item) {
         <button type="button" class="btn btn-danger" data-action="delete-item" data-id="${item.id}">Delete</button>
       </div>
     </div>
+
+    ${item.brand ? `
+    <div class="item-brand-hero" aria-label="Brand: ${escapeHtml(item.brand)}">
+      <div class="item-brand-hero-logo">${brandDisplay}</div>
+      <div class="item-brand-hero-info">
+        <span class="item-brand-hero-label">Manufacturer</span>
+        <strong class="item-brand-hero-name">${escapeHtml(item.brand)}</strong>
+        ${item.model ? `<span class="item-brand-hero-model text-muted">${escapeHtml(item.model)}</span>` : ''}
+      </div>
+    </div>
+    ` : ''}
 
     <div class="card">
       <div class="card-header">

@@ -1,6 +1,8 @@
 # Studio Inventory
 
-**Local inventory management for physical musical instruments and audio hardware** — built for home studios, optimized for Intel NUC deployment and fullscreen use on large 4K TVs.
+**Local inventory management for physical musical instruments and audio hardware** — built for home studios, optimized for fullscreen use on large displays and local network access.
+
+**Works on Windows, macOS, and Linux** — same app, same features. Your data stays on your machine.
 
 [![CI](https://github.com/TerkWerX/STUDIO-INVENTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/TerkWerX/STUDIO-INVENTORY/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -69,9 +71,54 @@ npm run reseed    # optional: load 15 sample gear items (~$15k value)
 npm start         # http://localhost:3847
 ```
 
-Open **http://localhost:3847** — press **F11** for TV fullscreen.
+Open **http://localhost:3847** — press **F11** (or **Cmd+Ctrl+F** on Mac) for fullscreen.
 
-From another device on your network: `http://<your-nuc-ip>:3847`
+From another device on your network: `http://<your-computer-ip>:3847`
+
+---
+
+## Mac Quick Start (for musician friends)
+
+Everything works on Mac — inventory, photos, manuals, receipts, warranty tracking, QR labels, and phone scanning.
+
+### 1. Install Node.js
+
+Download **Node.js 18+** (LTS) from [nodejs.org](https://nodejs.org) and run the installer.
+
+### 2. Get the app
+
+Open **Terminal** and run:
+
+```bash
+git clone https://github.com/TerkWerX/STUDIO-INVENTORY.git
+cd STUDIO-INVENTORY
+npm install
+npm start
+```
+
+Or download the ZIP from GitHub, unzip, `cd` into the folder, then `npm install` and `npm start`.
+
+### 3. Open in the browser
+
+Go to **http://localhost:3847** in Safari, Chrome, or Firefox.
+
+### 4. Use from iPhone / iPad (same Wi‑Fi)
+
+On your Mac, find your IP: **System Settings → Network** (or run `ipconfig getifaddr en0` in Terminal).
+
+On your phone: `http://192.168.x.x:3847` — great for scanning QR labels on gear.
+
+### Mac tips
+
+| Task | How |
+|------|-----|
+| **Start the server** | `npm start` or `./start-studio-inventory.sh` |
+| **First-time script** | `chmod +x start-studio-inventory.sh` then double-click or run it |
+| **Keyboard shortcuts** | Use **⌘** instead of Ctrl (⌘N new item, ⌘S save, ⌘F search) |
+| **DYMO label printing** | Install [DYMO Connect for Mac](https://www.dymo.com); use **Print Selected (Browser)** if direct print isn't available |
+| **Auto-start on login** | System Settings → General → Login Items → add `start-studio-inventory.sh` or a Terminal command |
+
+Skip `npm run reseed` if you want an empty inventory — that command only loads demo sample gear.
 
 ---
 
@@ -135,7 +182,7 @@ Print owner labels with QR codes for each piece of gear. Scanning with any phone
 4. Select items → **Print Selected (DYMO)** (30252 address labels recommended)
 5. Affix labels to gear
 
-**Browser fallback:** Use **Print Selected (Browser)** if DYMO Connect isn't detected — choose your LabelWriter in the Windows print dialog.
+**Browser fallback:** Use **Print Selected (Browser)** if DYMO Connect isn't detected — choose your label printer in the system print dialog (Windows or Mac).
 
 From any item's detail page, click **Print Owner Label** for a one-off print.
 
@@ -172,7 +219,9 @@ Disable update checks for end-of-life gear with the **Driver/Software Update Che
 
 ---
 
-## Auto-Start on Windows (NUC)
+## Auto-Start
+
+### Windows
 
 Double-click `start-studio-inventory.bat`, or add a shortcut to your Startup folder:
 
@@ -182,15 +231,25 @@ Double-click `start-studio-inventory.bat`, or add a shortcut to your Startup fol
 
 **Task Scheduler alternative:** trigger at startup, run `node.exe` with `server.js`, start in your project folder.
 
+### macOS
+
+```bash
+chmod +x start-studio-inventory.sh
+```
+
+Then add `start-studio-inventory.sh` via **System Settings → General → Login Items**, or create a Launch Agent if you prefer it always running in the background.
+
 ---
 
 ## Keyboard Shortcuts
 
+Works with **Ctrl** (Windows/Linux) or **⌘ Cmd** (Mac).
+
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+N` | New item |
-| `Ctrl+F` | Focus search (Inventory) |
-| `Ctrl+S` | Save item (form) |
+| `Ctrl/⌘ + N` | New item |
+| `Ctrl/⌘ + F` | Focus search (Inventory) |
+| `Ctrl/⌘ + S` | Save item (form) |
 | `Escape` | Close modal / lightbox |
 
 ---

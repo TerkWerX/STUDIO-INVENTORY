@@ -6,7 +6,7 @@ export function renderAbout() {
     <div class="card">
       <h3 class="section-title">Getting Started</h3>
       <p style="margin-bottom:1rem;color:var(--text-secondary)">
-        Studio Inventory runs locally on your studio computer (Intel NUC). All data is stored on your machine — no cloud, no internet required after the app loads.
+        Studio Inventory runs locally on your studio computer (Windows, Mac, or Linux). All data is stored on your machine — no cloud, no internet required after the app loads.
       </p>
       <ul style="list-style:disc;padding-left:1.5rem;color:var(--text-secondary);line-height:2">
         <li><strong>Dashboard</strong> — Overview of total value, categories, and recent items.</li>
@@ -26,9 +26,9 @@ export function renderAbout() {
     <div class="card">
       <h3 class="section-title">Keyboard Shortcuts</h3>
       <div class="detail-grid">
-        <div class="detail-field"><div class="field-label">Ctrl + N</div><div class="field-value">Add new item</div></div>
-        <div class="detail-field"><div class="field-label">Ctrl + F</div><div class="field-value">Focus search (on Inventory)</div></div>
-        <div class="detail-field"><div class="field-label">Ctrl + S</div><div class="field-value">Save item (on form)</div></div>
+        <div class="detail-field"><div class="field-label">Ctrl / ⌘ + N</div><div class="field-value">Add new item</div></div>
+        <div class="detail-field"><div class="field-label">Ctrl / ⌘ + F</div><div class="field-value">Focus search (on Inventory)</div></div>
+        <div class="detail-field"><div class="field-label">Ctrl / ⌘ + S</div><div class="field-value">Save item (on form)</div></div>
         <div class="detail-field"><div class="field-label">Escape</div><div class="field-value">Close modal / go back</div></div>
       </div>
     </div>
@@ -65,16 +65,17 @@ export function renderAbout() {
         <li>Select gear and click <strong>Print Selected (DYMO)</strong>. Use 30252 address labels for best results.</li>
         <li>Affix labels to gear. Scanning opens a quick page with manuals, drivers, edit link, and full details.</li>
       </ol>
-      <p style="margin-top:1rem;color:var(--text-muted)">If DYMO software isn't available, use <strong>Print Selected (Browser)</strong> and choose your LabelWriter in the Windows print dialog.</p>
+      <p style="margin-top:1rem;color:var(--text-muted)">If DYMO software isn't available, use <strong>Print Selected (Browser)</strong> and choose your label printer in the system print dialog.</p>
     </div>
 
     <div class="card">
-      <h3 class="section-title">Running on Your NUC</h3>
+      <h3 class="section-title">Running the Server</h3>
       <p style="color:var(--text-secondary);line-height:1.8">
-        Start the server with <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">npm start</code> from the project folder.
-        Open <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://localhost:3847</code> in your browser.
-        For TV display, connect the NUC via HDMI and use full-screen mode (F11).
-        The interface is optimized for large 4K screens with large fonts and touch-friendly controls.
+        <strong>Windows:</strong> <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">npm start</code> or double-click <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">start-studio-inventory.bat</code><br>
+        <strong>Mac:</strong> <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">npm start</code> or run <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">start-studio-inventory.sh</code> in Terminal<br>
+        Open <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://localhost:3847</code> in any browser.
+        From phones on the same Wi‑Fi, use <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://&lt;your-computer-ip&gt;:3847</code>.
+        Keyboard shortcuts use Ctrl on Windows or ⌘ Cmd on Mac.
       </p>
     </div>
   `;

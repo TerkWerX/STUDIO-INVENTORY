@@ -1,7 +1,10 @@
 import { api } from './api.js';
 import { debounce, showToast, showModal, buildDriverSearchUrl, buildValueEstimateUrl } from './utils.js';
 import { renderDashboard } from './views/dashboard.js';
-import { renderInventory, renderItemDetail, bindLightbox, bindPhotoDropZone, filterImageFiles } from './views/inventory.js';
+import {
+  renderInventory, renderItemDetail, bindLightbox, bindPhotoDropZone,
+  cleanupPhotoZoneListeners, filterImageFiles
+} from './views/inventory.js';
 import { renderItemForm, collectFormData, bindAutoEstimate, bindBrandSuggest } from './views/item-form.js';
 import { renderBrandsPage, renderBrandItems } from './views/brands.js';
 import { renderReports, renderInsurance, generatePdf } from './views/reports.js';
@@ -141,6 +144,7 @@ function setActiveNav(view) {
 }
 
 async function navigate(view, params = {}) {
+  if (view !== 'item-detail') cleanupPhotoZoneListeners();
   state.view = view;
   setActiveNav(view);
   container.innerHTML = '<p style="color:var(--text-muted);padding:2rem">Loading...</p>';

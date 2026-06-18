@@ -145,7 +145,7 @@ export function renderItemDetail(item) {
           Add Photos<input type="file" accept="image/*" multiple data-action="upload-photos" data-id="${item.id}" hidden>
         </label>
       </div>
-      <p class="photo-drop-hint text-muted-sm">Drag and drop images here, or use <strong>Add Photos</strong></p>
+      <p class="photo-drop-hint text-muted-sm">Drag and drop images here, <strong>Ctrl+V</strong> to paste from clipboard, or use <strong>Add Photos</strong></p>
       ${photos.length ? `
         <div class="photo-gallery">
           ${photos.map((p, i) => `
@@ -274,7 +274,55 @@ export function filterImageFiles(fileList) {
   return [...fileList].filter(f => f.type.startsWith('image/'));
 }
 
+export function getClipboardImageFiles(clipboardData) {
+  if (!clipboardData) return [];
+
+  if (clipboardData.files?.length) {
+    const fromFiles = filterImageFiles(clipboardData.files);
+    if (fromFiles.length) return fromFiles;
+  }
+
+  const pasted = [];
+  for (const entry of clipboardData.items || []) {
+    if (!entry.type.startsWith('image/')) continue;
+    const blob = entry.getAsFile();
+    if (!blob) continue;
+    const ext = entry.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+    pasted.push(new File([blob], `pasted-${Date.now()}-${pasted.length + 1}.${ext}`, { type: entry.type }));
+  }
+  return pasted;
+}
+
+let activePhotoZoneListeners = null;
+
+export function cleanupPhotoZoneListeners() {
+  if (!activePhotoZoneListeners) return;
+  const { dragover, dropOutside, paste } = activePhotoZoneListeners;
+  document.removeEventListener('dragover', dragover);
+  document.removeEventListener('drop', dropOutside);
+  document.removeEventListener('paste', paste);
+  activePhotoZoneListeners = null;
+}
+
+async function uploadPhotoFiles(zone, itemId, files, { onUpload, onError }) {
+  if (!files.length) {
+    onError?.('No image files detected — use JPG, PNG, WebP, etc.');
+    return;
+  }
+
+  zone.classList.add('photo-drop-uploading');
+  try {
+    await onUpload(itemId, files);
+  } catch (err) {
+    onError?.(err.message);
+  } finally {
+    zone.classList.remove('photo-drop-uploading');
+  }
+}
+
 export function bindPhotoDropZone(container, item, { onUpload, onError }) {
+  cleanupPhotoZoneListeners();
+
   const zone = container.querySelector('[data-photo-drop-zone]');
   if (!zone) return;
 
@@ -315,8 +363,27 @@ export function bindPhotoDropZone(container, item, { onUpload, onError }) {
       e.preventDefault();
     }
   };
+
+  const handlePaste = async (e) => {
+    if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+
+    const files = getClipboardImageFiles(e.clipboardData);
+    if (!files.length) return;
+
+    e.preventDefault();
+    setActive(true);
+    await uploadPhotoFiles(zone, item.id, files, { onUpload, onError });
+    setActive(false);
+  };
+
   document.addEventListener('dragover', blockFileDrag);
   document.addEventListener('drop', blockFileDropOutside);
+  document.addEventListener('paste', handlePaste);
+  activePhotoZoneListeners = {
+    dragover: blockFileDrag,
+    dropOutside: blockFileDropOutside,
+    paste: handlePaste
+  };
 
   zone.addEventListener('drop', async (e) => {
     e.preventDefault();
@@ -324,19 +391,7 @@ export function bindPhotoDropZone(container, item, { onUpload, onError }) {
     setActive(false);
 
     const files = filterImageFiles(e.dataTransfer?.files || []);
-    if (!files.length) {
-      onError?.('No image files detected — use JPG, PNG, WebP, etc.');
-      return;
-    }
-
-    zone.classList.add('photo-drop-uploading');
-    try {
-      await onUpload(item.id, files);
-    } catch (err) {
-      onError?.(err.message);
-    } finally {
-      zone.classList.remove('photo-drop-uploading');
-    }
+    await uploadPhotoFiles(zone, item.id, files, { onUpload, onError });
   });
 }
 

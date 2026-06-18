@@ -72,7 +72,7 @@ export function renderAbout() {
       <h3 class="section-title">Running the Server</h3>
       <p style="color:var(--text-secondary);line-height:1.8">
         <strong>Windows:</strong> <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">npm start</code> or double-click <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">start-studio-inventory.bat</code><br>
-        <strong>Mac:</strong> <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">npm start</code> or run <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">start-studio-inventory.sh</code> in Terminal<br>
+        <strong>Mac:</strong> <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">npm start</code> or run <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">start-studio-inventory.sh</code> in Terminal — full guide on GitHub: <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/MAC.md" target="_blank" rel="noopener" style="color:var(--accent)">MAC.md</a><br>
         Open <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://localhost:3847</code> in any browser.
         From phones on the same Wi‑Fi, use <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://&lt;your-computer-ip&gt;:3847</code>.
         Keyboard shortcuts use Ctrl on Windows or ⌘ Cmd on Mac.

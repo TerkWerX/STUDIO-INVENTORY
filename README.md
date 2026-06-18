@@ -8,6 +8,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 
+> **Mac musician?** Start here → **[MAC.md](MAC.md)** — full setup guide (Node, Terminal, iPhone access, DYMO, troubleshooting).
+
 > Tracks guitars, mics, interfaces, mixers, control surfaces, monitors, pedals, and amplifiers — **not** sample libraries, loops, or software sound assets.
 
 <p align="center">
@@ -77,17 +79,13 @@ From another device on your network: `http://<your-computer-ip>:3847`
 
 ---
 
-## Mac Quick Start (for musician friends)
+## Mac users
 
-Everything works on Mac — inventory, photos, manuals, receipts, warranty tracking, QR labels, and phone scanning.
+Studio Inventory runs natively on macOS — same features as Windows.
 
-### 1. Install Node.js
+**→ [MAC.md — complete Mac setup guide](MAC.md)** (install Node, clone or ZIP download, iPhone scanning, DYMO labels, backups, troubleshooting)
 
-Download **Node.js 18+** (LTS) from [nodejs.org](https://nodejs.org) and run the installer.
-
-### 2. Get the app
-
-Open **Terminal** and run:
+Quick version:
 
 ```bash
 git clone https://github.com/TerkWerX/STUDIO-INVENTORY.git
@@ -96,29 +94,7 @@ npm install
 npm start
 ```
 
-Or download the ZIP from GitHub, unzip, `cd` into the folder, then `npm install` and `npm start`.
-
-### 3. Open in the browser
-
-Go to **http://localhost:3847** in Safari, Chrome, or Firefox.
-
-### 4. Use from iPhone / iPad (same Wi‑Fi)
-
-On your Mac, find your IP: **System Settings → Network** (or run `ipconfig getifaddr en0` in Terminal).
-
-On your phone: `http://192.168.x.x:3847` — great for scanning QR labels on gear.
-
-### Mac tips
-
-| Task | How |
-|------|-----|
-| **Start the server** | `npm start` or `./start-studio-inventory.sh` |
-| **First-time script** | `chmod +x start-studio-inventory.sh` then double-click or run it |
-| **Keyboard shortcuts** | Use **⌘** instead of Ctrl (⌘N new item, ⌘S save, ⌘F search) |
-| **DYMO label printing** | Install [DYMO Connect for Mac](https://www.dymo.com); use **Print Selected (Browser)** if direct print isn't available |
-| **Auto-start on login** | System Settings → General → Login Items → add `start-studio-inventory.sh` or a Terminal command |
-
-Skip `npm run reseed` if you want an empty inventory — that command only loads demo sample gear.
+Open **http://localhost:3847** · Use **⌘** for keyboard shortcuts · Skip `npm run reseed` unless you want demo sample gear.
 
 ---
 

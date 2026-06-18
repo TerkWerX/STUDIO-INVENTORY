@@ -72,6 +72,17 @@ Pre-built packages are on the **[Releases](https://github.com/TerkWerX/STUDIO-IN
 
 These bundles include Node dependencies — your friends do **not** need to install Node.js or run `npm install`.
 
+### Updating without losing data
+
+Your inventory lives in the `data/` folder (database + photos + manuals + receipts). It is **never** included in release downloads.
+
+| How you installed | How to update |
+|-------------------|---------------|
+| **Windows/Mac package** | Download the newer release → run **Install Studio Inventory** again — your `data/` folder is backed up and restored automatically |
+| **Git clone** | `git pull && npm install` — `data/` is gitignored and stays put |
+
+The app checks GitHub at startup and shows an **update available** banner when a newer release is published.
+
 ---
 
 ## Quick Start (developers / git clone)

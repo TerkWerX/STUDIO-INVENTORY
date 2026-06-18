@@ -10,6 +10,7 @@ const {
   ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR
 } = require('./db');
 const { fetchBrandLogoFromWeb, fetchAllInventoryBrandLogos } = require('./lib/fetch-brand-logo');
+const { getCurrentVersion, checkForUpdate } = require('./lib/version');
 const QRCode = require('qrcode');
 
 const PORT = process.env.PORT || 3847;
@@ -199,7 +200,16 @@ function filenameFromResponse(url, headers) {
 // --- API ---
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, itemCount: db.prepare('SELECT COUNT(*) as c FROM items').get().c, dbPath: DB_PATH });
+  res.json({
+    ok: true,
+    version: getCurrentVersion(),
+    itemCount: db.prepare('SELECT COUNT(*) as c FROM items').get().c,
+    dbPath: DB_PATH
+  });
+});
+
+app.get('/api/update-check', async (_req, res) => {
+  res.json(await checkForUpdate());
 });
 
 app.get('/api/stats', (_req, res) => {
@@ -569,7 +579,16 @@ app.get('/scan/:id', (req, res) => {
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n  Studio Inventory running at http://localhost:${PORT}`);
+  console.log(`\n  Studio Inventory v${getCurrentVersion()} running at http://localhost:${PORT}`);
   console.log(`  Database: ${DB_PATH}`);
   console.log(`  Uploads:  ${UPLOADS_DIR}\n`);
+
+  checkForUpdate().then((info) => {
+    if (info.updateAvailable) {
+      console.log(`  Update available: v${info.latestVersion} (you have v${info.currentVersion})`);
+      console.log(`  Download: ${info.releaseUrl}\n`);
+    } else if (info.error) {
+      console.log(`  Update check skipped (${info.error})\n`);
+    }
+  }).catch(() => {});
 });

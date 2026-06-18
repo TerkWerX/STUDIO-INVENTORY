@@ -69,6 +69,19 @@ export function renderAbout() {
     </div>
 
     <div class="card">
+      <h3 class="section-title">Updates</h3>
+      <p style="color:var(--text-secondary);line-height:1.8">
+        Studio Inventory checks <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/releases" target="_blank" rel="noopener" style="color:var(--accent)">GitHub Releases</a> at startup.
+        When a newer version is available, a banner appears at the top of the app with a download link.
+      </p>
+      <p style="color:var(--text-secondary);line-height:1.8;margin-top:0.75rem">
+        <strong>Your inventory is safe when updating.</strong> Gear, photos, manuals, receipts, and warranty data live in the <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">data/</code> folder.
+        Re-run <strong>Install Studio Inventory</strong> from the new download — your <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">data/</code> folder is preserved automatically.
+        Developers using git: <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">git pull && npm install</code> — <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">data/</code> is never touched.
+      </p>
+    </div>
+
+    <div class="card">
       <h3 class="section-title">Running the Server</h3>
       <p style="color:var(--text-secondary);line-height:1.8">
         <strong>Windows:</strong> <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">npm start</code> or double-click <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">start-studio-inventory.bat</code><br>

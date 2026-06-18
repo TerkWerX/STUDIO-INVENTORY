@@ -59,6 +59,7 @@ async function main() {
 
   try {
     const health = await waitForHealth(`http://127.0.0.1:${PORT}/api/health`);
+    if (!health.version) throw new Error('Health API missing version');
     console.log('Health OK:', health);
 
     const brands = await fetch(`http://127.0.0.1:${PORT}/api/brands`).then(r => r.json());

@@ -43,6 +43,16 @@ No Terminal or Node.js required.
 
 Your browser opens at **http://localhost:3847** automatically.
 
+### Updating (your gear stays put)
+
+When the app shows an **update available** banner, or you see a new release on GitHub:
+
+1. Download the latest **macOS .dmg** or `.zip`
+2. Run **`Install Studio Inventory.command`** from the new package
+3. Your existing `data/` folder (inventory, photos, receipts) is **preserved automatically**
+
+You do not need to re-enter your gear.
+
 ---
 
 ## Developer install (git clone + Node.js)

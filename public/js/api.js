@@ -13,6 +13,7 @@ async function request(path, options = {}) {
 
 export const api = {
   health: () => request('/health'),
+  updateCheck: () => request('/update-check'),
   stats: () => request('/stats'),
   meta: () => request('/meta'),
   items: (params = {}) => {

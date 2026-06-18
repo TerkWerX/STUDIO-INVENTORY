@@ -70,6 +70,21 @@ body {
 .hidden { display: none !important; }
 
 /* Backup banner */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--font-sm);
+  font-weight: 600;
+}
+
+.update-banner .btn { background: #fff; color: var(--accent); }
+.update-banner .btn:hover { background: #f0f4ff; }
+.update-banner .btn-icon { color: #fff; }
+
 .backup-banner {
   display: flex;
   align-items: center;

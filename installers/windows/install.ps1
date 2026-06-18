@@ -1,20 +1,36 @@
-# Installs Studio Inventory to %LOCALAPPDATA%\Studio Inventory and creates shortcuts.
+# Installs or updates Studio Inventory to %LOCALAPPDATA%\Studio Inventory.
+# Existing inventory data in data\ is always preserved.
 $ErrorActionPreference = 'Stop'
 
 $Source = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Target = Join-Path $env:LOCALAPPDATA 'Studio Inventory'
 $StartBat = Join-Path $Target 'Start Studio Inventory.bat'
+$DataDir = Join-Path $Target 'data'
+$DataBackup = Join-Path $env:TEMP "studio-inventory-data-backup"
 
 Write-Host "Studio Inventory — Windows installer"
 Write-Host "Installing to: $Target"
 
+if (Test-Path $DataDir) {
+  Write-Host "Backing up your inventory data…"
+  if (Test-Path $DataBackup) { Remove-Item $DataBackup -Recurse -Force }
+  Copy-Item $DataDir $DataBackup -Recurse -Force
+}
+
 if (Test-Path $Target) {
   Write-Host "Updating existing install…"
-  Remove-Item -Recurse -Force $Target
+  Remove-Item $Target -Recurse -Force
 }
 
 New-Item -ItemType Directory -Path $Target -Force | Out-Null
 Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force
+
+if (Test-Path $DataBackup) {
+  Write-Host "Restoring your inventory data…"
+  if (Test-Path $DataDir) { Remove-Item $DataDir -Recurse -Force }
+  Copy-Item $DataBackup $DataDir -Recurse -Force
+  Remove-Item $DataBackup -Recurse -Force
+}
 
 $WshShell = New-Object -ComObject WScript.Shell
 
@@ -38,7 +54,7 @@ Write-Host "Start Menu shortcut created."
 
 Write-Host ""
 Write-Host "Installed. Double-click 'Studio Inventory' on your Desktop to start."
-Write-Host "Your data will be stored in: $(Join-Path $Target 'data')"
+Write-Host "Your data is stored in: $DataDir"
 
 $open = Read-Host "Start Studio Inventory now? (Y/n)"
 if ($open -ne 'n' -and $open -ne 'N') {

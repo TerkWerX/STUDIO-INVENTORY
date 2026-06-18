@@ -33,9 +33,10 @@ const container = document.getElementById('view-container');
 async function init() {
   try {
     const health = await api.health();
-    document.getElementById('item-count-label').textContent = `${health.itemCount} items`;
+    updateSidebarVersion(health);
     state.meta = await api.meta();
     showBackupBanner();
+    checkForAppUpdate();
     setupNav();
     setupTheme();
     setupKeyboard();
@@ -68,6 +69,40 @@ async function init() {
         <p>Start the server with <code>npm start</code> from the project folder, then refresh.</p>
         <p style="margin-top:1rem;color:var(--danger)">${err.message}</p>
       </div>`;
+  }
+}
+
+function updateSidebarVersion(health) {
+  const label = document.getElementById('item-count-label');
+  const version = health.version ? `v${health.version}` : '';
+  label.textContent = version
+    ? `${health.itemCount} items · ${version}`
+    : `${health.itemCount} items`;
+}
+
+async function checkForAppUpdate() {
+  try {
+    const info = await api.updateCheck();
+    if (!info.updateAvailable || !info.latestVersion) return;
+
+    const dismissed = localStorage.getItem('dismissedUpdateVersion');
+    if (dismissed === info.latestVersion) return;
+
+    const banner = document.getElementById('update-banner');
+    const text = document.getElementById('update-banner-text');
+    text.textContent = `Studio Inventory v${info.latestVersion} is available (you have v${info.currentVersion}). Your inventory data is kept when you install the update.`;
+
+    document.getElementById('update-banner-download').onclick = () => {
+      window.open(info.releaseUrl, '_blank', 'noopener');
+    };
+    document.getElementById('update-banner-dismiss').onclick = () => {
+      localStorage.setItem('dismissedUpdateVersion', info.latestVersion);
+      banner.classList.add('hidden');
+    };
+
+    banner.classList.remove('hidden');
+  } catch {
+    /* offline or GitHub unreachable */
   }
 }
 
@@ -255,7 +290,7 @@ async function navigate(view, params = {}) {
     }
 
     const health = await api.health();
-    document.getElementById('item-count-label').textContent = `${health.itemCount} items`;
+    updateSidebarVersion(health);
     document.getElementById('main-content').focus();
   } catch (err) {
     container.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;

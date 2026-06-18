@@ -1,7 +1,9 @@
+import { escapeHtml } from '../utils.js';
+
 export function renderAbout() {
   return `
     <h2 class="page-title">Help &amp; About</h2>
-    <p class="page-subtitle">Studio Inventory v1.0 — Local music gear management</p>
+    <p class="page-subtitle">Studio Inventory v1.5 — Local music gear management</p>
 
     <div class="card">
       <h3 class="section-title">Getting Started</h3>
@@ -25,6 +27,11 @@ export function renderAbout() {
         <li><strong>Studio status</strong> — Mark gear as loaned, in repair, storage, or away.</li>
         <li><strong>Phone photo upload</strong> — Scan QR on an item to add photos from your phone on the same Wi‑Fi.</li>
         <li><strong>CSV bulk import</strong> — Import dozens of items from a spreadsheet on the Backup page.</li>
+        <li><strong>Studio View</strong> — Room/zone map, rack layouts, and signal-chain diagrams.</li>
+        <li><strong>Guest link</strong> — Read-only LAN sharing for bandmates (Backup page).</li>
+        <li><strong>Depreciation &amp; insurance flags</strong> — Track depreciated value and policy-listed items.</li>
+        <li><strong>Accessories</strong> — Link cases, cables, and spare parts to parent gear.</li>
+        <li><strong>PDF manual search</strong> — Full-text search inside uploaded PDF manuals.</li>
       </ul>
       <p style="margin-top:1rem;color:var(--text-muted)">This app tracks <strong>physical hardware only</strong> — not sample libraries or sound assets.</p>
     </div>
@@ -100,10 +107,29 @@ export function renderAbout() {
   `;
 }
 
-export function renderBackup() {
+export function renderBackup(guest = {}) {
+  const guestOn = !!guest.guestEnabled;
+  const guestUrl = guest.guestUrl || '';
   return `
     <h2 class="page-title">Backup &amp; Restore</h2>
     <p class="page-subtitle">Protect your inventory data</p>
+
+    <div class="card guest-settings-card">
+      <h3 class="section-title">LAN Guest Link (Read-Only)</h3>
+      <p class="text-muted-sm" style="margin-bottom:1rem">
+        Share a read-only browser link with bandmates or family on the same Wi‑Fi. They can browse gear and values but cannot edit anything.
+      </p>
+      <label class="toggle-label guest-toggle">
+        <input type="checkbox" id="guest-enabled" ${guestOn ? 'checked' : ''}>
+        <span>Enable guest link</span>
+      </label>
+      <div class="guest-url-row ${guestOn ? '' : 'guest-url-disabled'}" id="guest-url-section">
+        <input type="text" id="guest-url" class="guest-url-input" readonly value="${escapeHtml(guestUrl)}">
+        <button type="button" class="btn btn-secondary btn-sm" id="guest-copy-url">Copy Link</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="guest-regenerate">Regenerate Token</button>
+      </div>
+      <p class="text-muted-sm guest-url-hint">Anyone with this URL can view inventory while guest access is enabled. Disable when not needed.</p>
+    </div>
 
     <div class="card" style="border-left:4px solid var(--warning)">
       <h3 class="section-title">⚠ Backup Reminder</h3>

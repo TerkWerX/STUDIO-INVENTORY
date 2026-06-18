@@ -1,14 +1,16 @@
-const CACHE = 'studio-inventory-v14';
+const CACHE = 'studio-inventory-v15';
 const ASSETS = [
   '/',
   '/index.html',
   '/scan.html',
+  '/guest.html',
   '/css/styles.css',
   '/css/scan.css',
   '/js/app.js',
   '/js/api.js',
   '/js/utils.js',
   '/js/scan.js',
+  '/js/guest.js',
   '/js/views/dashboard.js',
   '/js/views/inventory.js',
   '/js/views/item-form.js',
@@ -18,6 +20,7 @@ const ASSETS = [
   '/js/views/brands.js',
   '/js/views/labels.js',
   '/js/views/binder.js',
+  '/js/views/studio-view.js',
   '/js/lib/binder-print.js',
   '/js/lib/completeness-ui.js',
   '/photo-upload.html',

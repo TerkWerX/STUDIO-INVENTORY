@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Studio Inventory — Guest View</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <style>
+    .guest-banner {
+      background: var(--accent);
+      color: #fff;
+      padding: 0.65rem 1.5rem;
+      text-align: center;
+      font-weight: 600;
+      font-size: var(--font-sm);
+    }
+    .guest-shell { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <div class="guest-banner">Read-only guest view — LAN access only · no editing</div>
+  <div class="guest-shell">
+    <h1 class="page-title">Studio Gear</h1>
+    <p class="page-subtitle" id="guest-subtitle">Loading…</p>
+    <div id="guest-content"></div>
+  </div>
+  <script type="module" src="/js/guest.js"></script>
+</body>
+</html>

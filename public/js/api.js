@@ -86,5 +86,19 @@ export const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   }),
-  deleteMaintenance: (id) => request(`/maintenance/${id}`, { method: 'DELETE' })
+  deleteMaintenance: (id) => request(`/maintenance/${id}`, { method: 'DELETE' }),
+  studioMap: () => request('/studio/map'),
+  racks: () => request('/racks'),
+  createRack: (data) => request('/racks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  deleteRack: (id) => request(`/racks/${id}`, { method: 'DELETE' }),
+  setRackItems: (id, items) => request(`/racks/${id}/items`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) }),
+  signalChains: () => request('/signal-chains'),
+  createSignalChain: (data) => request('/signal-chains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  deleteSignalChain: (id) => request(`/signal-chains/${id}`, { method: 'DELETE' }),
+  setSignalChainItems: (id, items) => request(`/signal-chains/${id}/items`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) }),
+  guestSettings: () => request('/settings/guest'),
+  updateGuestSettings: (data) => request('/settings/guest', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  regenerateGuestToken: () => request('/settings/guest/regenerate', { method: 'POST' }),
+  searchManuals: (q) => request(`/manuals/search?q=${encodeURIComponent(q)}`),
+  reindexManuals: () => request('/manuals/reindex', { method: 'POST' })
 };

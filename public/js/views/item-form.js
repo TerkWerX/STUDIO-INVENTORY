@@ -5,11 +5,14 @@ export function renderItemForm(item, meta) {
   const data = item || {
     name: '', common_name: '', category: '', brand: '', model: '',
     serial_number: '', year: '', purchase_date: '', purchase_price: 0,
-    replacement_value: 0, replacement_value_note: '', condition: 'Good',
-    condition_notes: '', location: '', description: '', quantity: 1,
+    replacement_value: 0, replacement_value_note: '', depreciated_value: 0,
+    on_insurance_policy: false, insurance_policy_note: '', parent_item_id: null,
+    condition: 'Good', condition_notes: '', location: '', description: '', quantity: 1,
     update_checks_enabled: true, warranty_end_date: '', warranty_note: '',
     studio_status: 'in_studio', studio_status_note: '', tags: []
   };
+  const parentItems = (meta.parentItems || []).filter(p => !isEdit || p.id !== data.id);
+  const onPolicy = data.on_insurance_policy === true || data.on_insurance_policy === 1;
   const tagNames = (data.tags || []).map(t => typeof t === 'string' ? t : t.name);
   const checksOn = data.update_checks_enabled !== false && data.update_checks_enabled !== 0;
 
@@ -107,15 +110,43 @@ export function renderItemForm(item, meta) {
           <input type="text" id="warranty_note" value="${escapeHtml(data.warranty_note || '')}" placeholder="e.g. Sweetwater 2-year, manufacturer 1-year">
         </div>
         <div class="form-group">
+          <label for="parent_item_id">Parent Item (accessory of)</label>
+          <select id="parent_item_id">
+            <option value="">None — top-level gear</option>
+            ${parentItems.map(p => `
+              <option value="${p.id}" ${String(data.parent_item_id) === String(p.id) ? 'selected' : ''}>
+                ${escapeHtml(p.name)}${p.brand ? ` (${escapeHtml(p.brand)})` : ''}
+              </option>
+            `).join('')}
+          </select>
+          <p class="text-muted-sm" style="margin-top:0.35rem">Link cases, cables, extra mics, etc. to the main piece of gear.</p>
+        </div>
+        <div class="form-group">
           <label for="replacement_value">Replacement Value ($)</label>
           <div style="display:flex;gap:0.5rem;align-items:stretch">
             <input type="number" id="replacement_value" min="0" step="0.01" value="${data.replacement_value || 0}" style="flex:1">
             <button type="button" class="btn btn-accent btn-sm" id="form-auto-estimate" style="min-height:var(--touch-min)">Auto-Estimate</button>
           </div>
         </div>
+        <div class="form-group">
+          <label for="depreciated_value">Depreciated Value ($)</label>
+          <input type="number" id="depreciated_value" min="0" step="0.01" value="${data.depreciated_value || 0}">
+          <p class="text-muted-sm" style="margin-top:0.35rem">Tax or insurance depreciation — separate from replacement cost.</p>
+        </div>
         <div class="form-group full-width">
           <label for="replacement_value_note">Replacement Value Note</label>
           <input type="text" id="replacement_value_note" value="${escapeHtml(data.replacement_value_note)}" placeholder="Source or estimation method (e.g. Reverb avg June 2026)">
+        </div>
+        <div class="form-group">
+          <label>Insurance Policy</label>
+          <label class="toggle-label">
+            <input type="checkbox" id="on_insurance_policy" ${onPolicy ? 'checked' : ''}>
+            <span>Listed on insurance policy</span>
+          </label>
+        </div>
+        <div class="form-group full-width">
+          <label for="insurance_policy_note">Insurance Policy Note</label>
+          <input type="text" id="insurance_policy_note" value="${escapeHtml(data.insurance_policy_note || '')}" placeholder="e.g. Rider B item 14, scheduled 2025-03">
         </div>
         <div class="form-group full-width">
           <label for="condition_notes">Condition Notes</label>
@@ -174,8 +205,12 @@ export function collectFormData() {
     purchase_price: document.getElementById('purchase_price').value,
     warranty_end_date: document.getElementById('warranty_end_date').value,
     warranty_note: document.getElementById('warranty_note').value,
+    parent_item_id: document.getElementById('parent_item_id').value || null,
     replacement_value: document.getElementById('replacement_value').value,
     replacement_value_note: document.getElementById('replacement_value_note').value,
+    depreciated_value: document.getElementById('depreciated_value').value,
+    on_insurance_policy: document.getElementById('on_insurance_policy').checked,
+    insurance_policy_note: document.getElementById('insurance_policy_note').value,
     condition_notes: document.getElementById('condition_notes').value,
     description: document.getElementById('description').value,
     update_checks_enabled: document.getElementById('update_checks_enabled').checked,

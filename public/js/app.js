@@ -12,6 +12,7 @@ import { renderManuals } from './views/manuals.js';
 import { renderAbout, renderBackup } from './views/about.js';
 import { renderLabelsPage, bindLabelsPageEvents, printSingleItemLabel } from './views/labels.js';
 import { renderBinderPage, getBinderOptionsFromDom, getSelectedBinderItemIds } from './views/binder.js';
+import { renderStudioView, rackItemsPayload, chainItemsPayload } from './views/studio-view.js';
 import { printBinderDocument, printBinderItems, openManualForPrint } from './lib/binder-print.js';
 import { getDymoStatus } from './lib/dymo-labels.js';
 import { loadLabelSettings } from './lib/label-settings.js';
@@ -25,9 +26,14 @@ const state = {
   selectedItemId: null,
   editItemId: null,
   manualSearch: '',
+  manualFtsQuery: '',
+  manualFtsResults: null,
+  pdfSearchEnabled: true,
   brands: [],
   selectedBrand: null,
-  labelPreselectId: null
+  labelPreselectId: null,
+  parentItemId: null,
+  studioTab: 'rooms'
 };
 
 const container = document.getElementById('view-container');
@@ -196,6 +202,18 @@ async function navigate(view, params = {}) {
         bindBrandFilterEvents();
         break;
 
+      case 'studio-view':
+        const [map, racks, chains, allItems] = await Promise.all([
+          api.studioMap(),
+          api.racks(),
+          api.signalChains(),
+          api.items({ sort: 'name', include_accessories: '1' })
+        ]);
+        state.items = allItems;
+        container.innerHTML = renderStudioView({ map, racks, chains, items: allItems }, state.studioTab);
+        bindStudioViewEvents({ map, racks, chains, items: allItems });
+        break;
+
       case 'brands':
         state.brands = await api.brands();
         container.innerHTML = renderBrandsPage(state.brands);
@@ -217,7 +235,10 @@ async function navigate(view, params = {}) {
         break;
 
       case 'inventory':
-        state.items = await api.items(state.filters);
+        state.items = await api.items({
+          ...state.filters,
+          include_accessories: state.filters.show_accessories ? '1' : undefined
+        });
         container.innerHTML = renderInventory(state.items, state.meta, state.filters);
         bindInventoryEvents();
         break;
@@ -237,19 +258,34 @@ async function navigate(view, params = {}) {
         bindLightbox(item.photos || []);
         break;
 
-      case 'item-form':
-        const editItem = state.editItemId ? await api.item(state.editItemId) : null;
-        state.brands = state.meta?.brands?.length ? state.meta.brands : await api.brands();
-        state.meta = { ...state.meta, brands: state.brands };
+      case 'item-form': {
+        const editItem = state.editItemId
+          ? await api.item(state.editItemId)
+          : (state.parentItemId ? { parent_item_id: state.parentItemId } : null);
+        const [parentItems, brands] = await Promise.all([
+          api.items({ sort: 'name' }),
+          state.meta?.brands?.length ? Promise.resolve(state.meta.brands) : api.brands()
+        ]);
+        state.brands = brands;
+        state.meta = { ...state.meta, brands, parentItems };
         container.innerHTML = renderItemForm(editItem, state.meta);
+        state.parentItemId = null;
         bindFormEvents();
         break;
+      }
 
-      case 'manuals':
-        const manuals = await api.manuals();
-        container.innerHTML = renderManuals(manuals, state.manualSearch);
+      case 'manuals': {
+        const [manuals, guestInfo] = await Promise.all([api.manuals(), api.guestSettings()]);
+        state.pdfSearchEnabled = guestInfo.pdfSearchEnabled !== false;
+        container.innerHTML = renderManuals(manuals, {
+          searchQuery: state.manualSearch,
+          ftsQuery: state.manualFtsQuery,
+          ftsResults: state.manualFtsResults,
+          pdfSearchEnabled: state.pdfSearchEnabled
+        });
         bindManualEvents(manuals);
         break;
+      }
 
       case 'labels':
         state.items = await api.items({ sort: 'name' });
@@ -289,10 +325,12 @@ async function navigate(view, params = {}) {
         bindInsuranceEvents();
         break;
 
-      case 'backup':
-        container.innerHTML = renderBackup();
+      case 'backup': {
+        const guestSettings = await api.guestSettings();
+        container.innerHTML = renderBackup(guestSettings);
         bindBackupEvents();
         break;
+      }
 
       case 'about':
         container.innerHTML = renderAbout();
@@ -400,6 +438,7 @@ function bindInventoryEvents() {
     state.filters.min_value = document.getElementById('filter-min-value').value;
     state.filters.max_value = document.getElementById('filter-max-value').value;
     state.filters.sort = document.getElementById('filter-sort').value;
+    state.filters.show_accessories = document.getElementById('filter-show-accessories')?.checked || false;
     navigate('inventory');
   }, 350);
 
@@ -407,6 +446,7 @@ function bindInventoryEvents() {
   ['filter-category', 'filter-location', 'filter-condition', 'filter-tag', 'filter-sort'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', doSearch);
   });
+  document.getElementById('filter-show-accessories')?.addEventListener('change', doSearch);
   ['filter-min-value', 'filter-max-value'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', doSearch);
   });
@@ -429,6 +469,24 @@ function bindInventoryEvents() {
 
 function bindDetailEvents(item) {
   container.querySelector('[data-nav="inventory"]')?.addEventListener('click', () => navigate('inventory'));
+
+  container.querySelector('[data-action="add-accessory"]')?.addEventListener('click', () => {
+    state.editItemId = null;
+    state.parentItemId = item.id;
+    navigate('item-form');
+  });
+
+  container.querySelector('[data-action="view-parent"]')?.addEventListener('click', (e) => {
+    state.selectedItemId = e.currentTarget.dataset.id;
+    navigate('item-detail', { id: e.currentTarget.dataset.id });
+  });
+
+  container.querySelectorAll('[data-action="view-item"]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.selectedItemId = el.dataset.id;
+      navigate('item-detail', { id: el.dataset.id });
+    });
+  });
   container.querySelector('[data-action="print-binder-page"]')?.addEventListener('click', () => {
     try {
       const settings = loadLabelSettings();
@@ -671,12 +729,63 @@ function bindFormEvents() {
 }
 
 function bindManualEvents(manuals) {
+  const rerender = () => {
+    container.innerHTML = renderManuals(manuals, {
+      searchQuery: state.manualSearch,
+      ftsQuery: state.manualFtsQuery,
+      ftsResults: state.manualFtsResults,
+      pdfSearchEnabled: state.pdfSearchEnabled
+    });
+    bindManualEvents(manuals);
+  };
+
   const doSearch = debounce(() => {
     state.manualSearch = document.getElementById('manual-search').value;
-    container.innerHTML = renderManuals(manuals, state.manualSearch);
-    bindManualEvents(manuals);
+    rerender();
   }, 300);
   document.getElementById('manual-search')?.addEventListener('input', doSearch);
+
+  const runFtsSearch = async () => {
+    const q = document.getElementById('manual-fts-search')?.value?.trim() || '';
+    state.manualFtsQuery = q;
+    if (q.length < 2) {
+      state.manualFtsResults = [];
+      rerender();
+      return;
+    }
+    try {
+      state.manualFtsResults = await api.searchManuals(q);
+      rerender();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  document.getElementById('manual-fts-go')?.addEventListener('click', runFtsSearch);
+  document.getElementById('manual-fts-search')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runFtsSearch(); }
+  });
+
+  document.getElementById('manual-reindex')?.addEventListener('click', async () => {
+    const ok = await showModal({
+      title: 'Reindex All PDF Manuals?',
+      message: 'This extracts text from every PDF manual for full-text search. It may take a minute on large libraries.',
+      confirmText: 'Reindex',
+      cancelText: 'Cancel'
+    });
+    if (!ok) return;
+    try {
+      showToast('Reindexing PDF manuals...', 'info');
+      const result = await api.reindexManuals();
+      showToast(`Indexed ${result.indexed || 0} manual(s)`, 'success');
+      if (state.manualFtsQuery.length >= 2) {
+        state.manualFtsResults = await api.searchManuals(state.manualFtsQuery);
+      }
+      rerender();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
 
   container.querySelectorAll('[data-action="view-item"]').forEach(el => {
     el.addEventListener('click', () => {
@@ -780,6 +889,129 @@ function bindBinderEvents() {
   });
 }
 
+function bindStudioViewEvents() {
+  container.querySelectorAll('[data-studio-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.studioTab = btn.dataset.studioTab;
+      navigate('studio-view');
+    });
+  });
+
+  container.querySelectorAll('[data-action="view-item"]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.selectedItemId = el.dataset.id;
+      navigate('item-detail', { id: el.dataset.id });
+    });
+  });
+
+  document.getElementById('new-rack-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api.createRack({
+        name: document.getElementById('rack-name').value,
+        location: document.getElementById('rack-location').value,
+        notes: document.getElementById('rack-notes').value
+      });
+      showToast('Rack created', 'success');
+      navigate('studio-view');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+
+  document.getElementById('new-chain-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api.createSignalChain({
+        name: document.getElementById('chain-name').value,
+        description: document.getElementById('chain-desc').value
+      });
+      showToast('Signal chain created', 'success');
+      state.studioTab = 'chains';
+      navigate('studio-view');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+
+  container.querySelectorAll('[data-action="delete-rack"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!await showModal({ title: 'Delete rack?', message: 'Remove this rack layout (gear items stay in inventory).', confirmText: 'Delete', danger: true })) return;
+      await api.deleteRack(btn.dataset.id);
+      showToast('Rack deleted', 'success');
+      navigate('studio-view');
+    });
+  });
+
+  container.querySelectorAll('[data-action="delete-chain"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!await showModal({ title: 'Delete chain?', message: 'Remove this signal chain layout.', confirmText: 'Delete', danger: true })) return;
+      await api.deleteSignalChain(btn.dataset.id);
+      showToast('Chain deleted', 'success');
+      navigate('studio-view');
+    });
+  });
+
+  container.querySelectorAll('[data-action="rack-add-item"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const rackId = btn.dataset.rack;
+      const select = container.querySelector(`.rack-add-select[data-rack="${rackId}"]`);
+      const slotInput = container.querySelector(`.rack-slot-input[data-rack="${rackId}"]`);
+      const itemId = select?.value;
+      if (!itemId) return showToast('Select an item', 'error');
+      const rack = await api.racks().then(rs => rs.find(r => String(r.id) === String(rackId)));
+      const items = [...(rack?.items || []).map((s, i) => ({
+        item_id: s.id, position: i, slot_label: s.slot_label || ''
+      })), {
+        item_id: Number(itemId),
+        position: (rack?.items?.length || 0),
+        slot_label: slotInput?.value || ''
+      }];
+      await api.setRackItems(rackId, items);
+      showToast('Added to rack', 'success');
+      state.studioTab = 'racks';
+      navigate('studio-view');
+    });
+  });
+
+  container.querySelectorAll('[data-action="rack-remove-item"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const rackId = btn.dataset.rack;
+      const removeId = Number(btn.dataset.item);
+      const rack = await api.racks().then(rs => rs.find(r => String(r.id) === String(rackId)));
+      const items = (rack?.items || []).filter(s => s.id !== removeId).map((s, i) => ({
+        item_id: s.id, position: i, slot_label: s.slot_label || ''
+      }));
+      await api.setRackItems(rackId, items);
+      navigate('studio-view');
+    });
+  });
+
+  container.querySelectorAll('[data-action="chain-add-item"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const chainId = btn.dataset.chain;
+      const select = container.querySelector(`.chain-add-select[data-chain="${chainId}"]`);
+      const itemId = select?.value;
+      if (!itemId) return showToast('Select an item', 'error');
+      const chain = await api.signalChains().then(cs => cs.find(c => String(c.id) === String(chainId)));
+      const items = [...(chain?.items || []).map((s, i) => ({ item_id: s.id, position: i })), {
+        item_id: Number(itemId), position: (chain?.items?.length || 0)
+      }];
+      await api.setSignalChainItems(chainId, items);
+      showToast('Added to chain', 'success');
+      state.studioTab = 'chains';
+      navigate('studio-view');
+    });
+  });
+
+  container.querySelectorAll('[data-action="chain-remove-item"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const chainId = btn.dataset.chain;
+      const removeId = Number(btn.dataset.item);
+      const chain = await api.signalChains().then(cs => cs.find(c => String(c.id) === String(chainId)));
+      const items = (chain?.items || []).filter(s => s.id !== removeId).map((s, i) => ({ item_id: s.id, position: i }));
+      await api.setSignalChainItems(chainId, items);
+      navigate('studio-view');
+    });
+  });
+}
+
 function bindReportEvents() {
   const fmt = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
 
@@ -841,6 +1073,57 @@ function bindInsuranceEvents() {
 }
 
 function bindBackupEvents() {
+  const guestUrlSection = document.getElementById('guest-url-section');
+  const guestUrlInput = document.getElementById('guest-url');
+  const guestEnabledCheck = document.getElementById('guest-enabled');
+
+  const setGuestSectionState = (enabled) => {
+    guestUrlSection?.classList.toggle('guest-url-disabled', !enabled);
+  };
+
+  guestEnabledCheck?.addEventListener('change', async () => {
+    try {
+      const result = await api.updateGuestSettings({ guestEnabled: guestEnabledCheck.checked });
+      if (guestUrlInput) guestUrlInput.value = result.guestUrl || guestUrlInput.value;
+      setGuestSectionState(guestEnabledCheck.checked);
+      showToast(result.guestEnabled ? 'Guest link enabled' : 'Guest link disabled', 'success');
+    } catch (err) {
+      guestEnabledCheck.checked = !guestEnabledCheck.checked;
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('guest-copy-url')?.addEventListener('click', async () => {
+    const url = guestUrlInput?.value;
+    if (!url) return showToast('No guest URL available', 'error');
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('Guest link copied', 'success');
+    } catch {
+      guestUrlInput?.select();
+      showToast('Select the URL and copy manually', 'info');
+    }
+  });
+
+  document.getElementById('guest-regenerate')?.addEventListener('click', async () => {
+    const ok = await showModal({
+      title: 'Regenerate Guest Token?',
+      message: 'The old link will stop working. Anyone using the previous URL will need the new one.',
+      confirmText: 'Regenerate',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      const result = await api.regenerateGuestToken();
+      if (guestUrlInput) guestUrlInput.value = result.guestUrl || '';
+      showToast('New guest link generated', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  setGuestSectionState(guestEnabledCheck?.checked);
+
   document.getElementById('backup-export-json')?.addEventListener('click', () => {
     api.exportJson();
     localStorage.setItem('lastBackup', String(Date.now()));
@@ -855,7 +1138,7 @@ function bindBackupEvents() {
 
   document.getElementById('download-csv-template')?.addEventListener('click', () => {
     const template = [
-      'name,brand,model,serial_number,category,location,condition,replacement_value,purchase_price,purchase_date,warranty_end_date,tags',
+      'name,brand,model,serial_number,category,location,condition,replacement_value,depreciated_value,purchase_price,purchase_date,warranty_end_date,on_insurance_policy,tags',
       'Shure SM57,Shure,SM57,SN12345,Microphone,Main Rack,Good,99,89,2024-01-15,,vocal;dynamic',
       'Boss DD-500,Boss,DD-500,,Pedal,Pedalboard,Excellent,399,349,,,delay'
     ].join('\n');

@@ -57,6 +57,23 @@ function runMigrations() {
     db.exec('ALTER TABLE items ADD COLUMN value_updated_at TEXT DEFAULT NULL');
     db.exec(`UPDATE items SET value_updated_at = updated_at WHERE replacement_value > 0 AND value_updated_at IS NULL`);
   }
+  if (!itemCols.includes('parent_item_id')) {
+    db.exec('ALTER TABLE items ADD COLUMN parent_item_id INTEGER DEFAULT NULL REFERENCES items(id) ON DELETE SET NULL');
+  }
+  if (!itemCols.includes('depreciated_value')) {
+    db.exec('ALTER TABLE items ADD COLUMN depreciated_value REAL DEFAULT 0');
+  }
+  if (!itemCols.includes('on_insurance_policy')) {
+    db.exec('ALTER TABLE items ADD COLUMN on_insurance_policy INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!itemCols.includes('insurance_policy_note')) {
+    db.exec("ALTER TABLE items ADD COLUMN insurance_policy_note TEXT DEFAULT ''");
+  }
+
+  const attCols2 = db.prepare('PRAGMA table_info(attachments)').all().map(c => c.name);
+  if (!attCols2.includes('extracted_text')) {
+    db.exec("ALTER TABLE attachments ADD COLUMN extracted_text TEXT DEFAULT ''");
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS maintenance_log (
@@ -69,6 +86,54 @@ function runMigrations() {
       FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_maintenance_item ON maintenance_log(item_id);
+
+    CREATE TABLE IF NOT EXISTS racks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      location TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS rack_items (
+      rack_id INTEGER NOT NULL,
+      item_id INTEGER NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      slot_label TEXT DEFAULT '',
+      PRIMARY KEY (rack_id, item_id),
+      FOREIGN KEY (rack_id) REFERENCES racks(id) ON DELETE CASCADE,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_chains (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_chain_items (
+      chain_id INTEGER NOT NULL,
+      item_id INTEGER NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (chain_id, item_id),
+      FOREIGN KEY (chain_id) REFERENCES signal_chains(id) ON DELETE CASCADE,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent_item_id);
+  `);
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS manual_fts USING fts5(
+      attachment_id UNINDEXED,
+      item_name,
+      file_name,
+      body,
+      tokenize='porter'
+    );
   `);
 
   const attCols = db.prepare('PRAGMA table_info(attachments)').all().map(c => c.name);
@@ -231,6 +296,18 @@ function enrichItem(item) {
     software: attachments.filter(a => a.type === 'software'),
     receipts: attachments.filter(a => a.type === 'receipt'),
     maintenance: getMaintenanceForItem(item.id),
+    parent: getParentSummary(item.parent_item_id),
+    accessories: getAccessoryItems(item.id).map(child => {
+      const att = getAttachmentsForItem(child.id);
+      return {
+        ...child,
+        on_insurance_policy: child.on_insurance_policy !== 0,
+        update_checks_enabled: child.update_checks_enabled !== 0,
+        photos: att.filter(a => a.type === 'photo'),
+        tags: getTagsForItem(child.id)
+      };
+    }),
+    on_insurance_policy: item.on_insurance_policy !== 0,
     completeness: computeItemCompleteness({
       ...item,
       photos: attachments.filter(a => a.type === 'photo'),
@@ -270,6 +347,8 @@ function sanitizeItemInput(body) {
   const updateChecks = body.update_checks_enabled === false || body.update_checks_enabled === 0 || body.update_checks_enabled === '0' ? 0 : 1;
   const statuses = ['in_studio', 'loaned', 'in_repair', 'storage', 'away'];
   const studio_status = statuses.includes(body.studio_status) ? body.studio_status : 'in_studio';
+  const parentId = body.parent_item_id != null && body.parent_item_id !== ''
+    ? parseInt(body.parent_item_id, 10) : null;
 
   return {
     name: str(body.name, 300) || 'Unnamed Item',
@@ -292,8 +371,50 @@ function sanitizeItemInput(body) {
     warranty_end_date: str(body.warranty_end_date, 20),
     warranty_note: str(body.warranty_note, 500),
     studio_status,
-    studio_status_note: str(body.studio_status_note, 500)
+    studio_status_note: str(body.studio_status_note, 500),
+    parent_item_id: parentId && !isNaN(parentId) ? parentId : null,
+    depreciated_value: num(body.depreciated_value),
+    on_insurance_policy: body.on_insurance_policy === true || body.on_insurance_policy === 1 || body.on_insurance_policy === '1' ? 1 : 0,
+    insurance_policy_note: str(body.insurance_policy_note, 500)
   };
+}
+
+function getParentSummary(parentId) {
+  if (!parentId) return null;
+  const p = db.prepare('SELECT id, name, common_name FROM items WHERE id = ?').get(parentId);
+  return p || null;
+}
+
+function getAccessoryItems(parentId) {
+  return db.prepare('SELECT * FROM items WHERE parent_item_id = ? ORDER BY name').all(parentId);
+}
+
+function getRacks() {
+  const racks = db.prepare('SELECT * FROM racks ORDER BY sort_order, name').all();
+  return racks.map(rack => ({
+    ...rack,
+    items: db.prepare(`
+      SELECT ri.position, ri.slot_label, i.id, i.name, i.brand, i.model, i.category, i.replacement_value
+      FROM rack_items ri
+      JOIN items i ON i.id = ri.item_id
+      WHERE ri.rack_id = ?
+      ORDER BY ri.position ASC, i.name ASC
+    `).all(rack.id)
+  }));
+}
+
+function getSignalChains() {
+  const chains = db.prepare('SELECT * FROM signal_chains ORDER BY sort_order, name').all();
+  return chains.map(chain => ({
+    ...chain,
+    items: db.prepare(`
+      SELECT sci.position, i.id, i.name, i.brand, i.model, i.category, i.replacement_value
+      FROM signal_chain_items sci
+      JOIN items i ON i.id = sci.item_id
+      WHERE sci.chain_id = ?
+      ORDER BY sci.position ASC
+    `).all(chain.id)
+  }));
 }
 
 function getMaintenanceForItem(itemId) {
@@ -356,5 +477,9 @@ module.exports = {
   syncBrandsFromItems,
   getMaintenanceForItem,
   addMaintenanceEntry,
-  deleteMaintenanceEntry
+  deleteMaintenanceEntry,
+  getParentSummary,
+  getAccessoryItems,
+  getRacks,
+  getSignalChains
 };

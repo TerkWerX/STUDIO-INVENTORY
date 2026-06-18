@@ -66,6 +66,12 @@ export function renderInventory(items, meta, filters) {
             <option value="location" ${f.sort === 'location' ? 'selected' : ''}>Location</option>
           </select>
         </div>
+        <div class="form-group filter-toggle">
+          <label class="toggle-label">
+            <input type="checkbox" id="filter-show-accessories" ${f.show_accessories ? 'checked' : ''}>
+            <span>Show accessories</span>
+          </label>
+        </div>
         <button type="button" class="btn btn-secondary" id="clear-filters">Clear</button>
       </div>
     </div>
@@ -84,10 +90,13 @@ export function renderInventory(items, meta, filters) {
           </thead>
           <tbody>
             ${items.map(item => `
-              <tr data-action="view-item" data-id="${item.id}">
+              <tr data-action="view-item" data-id="${item.id}" class="${item.parent_item_id ? 'accessory-row' : ''}">
                 <td>
                   <strong>${escapeHtml(item.name)}</strong>
+                  ${item.parent_item_id ? `<span class="accessory-badge">Accessory</span>` : ''}
+                  ${item.on_insurance_policy ? `<span class="policy-badge policy-badge-compact">Insured</span>` : ''}
                   ${item.common_name ? `<br><span class="text-muted-sm">${escapeHtml(item.common_name)}</span>` : ''}
+                  ${item.parent?.name ? `<br><span class="text-muted-sm">↳ ${escapeHtml(item.parent.name)}</span>` : ''}
                   ${renderStudioStatusBadge(item)}
                 </td>
                 <td>${renderCompletenessBadge(item.completeness, { compact: true })}</td>
@@ -121,7 +130,11 @@ export function renderItemDetail(item) {
       <div>
         <h2 class="page-title" style="margin:0">${escapeHtml(item.name)}</h2>
         ${item.common_name ? `<p class="page-subtitle" style="margin:0.25rem 0 0">${escapeHtml(item.common_name)}</p>` : ''}
-        ${renderStudioStatusBadge(item) ? `<div style="margin-top:0.5rem">${renderStudioStatusBadge(item)}</div>` : ''}
+        <div class="detail-badges" style="margin-top:0.5rem">
+          ${renderStudioStatusBadge(item) || ''}
+          ${item.on_insurance_policy ? `<span class="policy-badge">On Insurance Policy</span>` : ''}
+          ${item.parent?.name ? `<span class="parent-link-badge">Accessory of <button type="button" class="btn btn-ghost btn-sm" data-action="view-parent" data-id="${item.parent.id}">${escapeHtml(item.parent.name)}</button></span>` : ''}
+        </div>
       </div>
       <div class="btn-group">
         <button type="button" class="btn btn-secondary" data-nav="inventory">Back</button>
@@ -145,6 +158,56 @@ export function renderItemDetail(item) {
     ` : ''}
 
     ${renderCompletenessChecklist(item.completeness)}
+
+    <div class="card value-trio-card">
+      <h3 class="section-title">Values</h3>
+      <div class="value-trio">
+        <div class="value-trio-item">
+          <span class="value-trio-label">Purchase</span>
+          <span class="value-trio-amount">${formatCurrency(item.purchase_price)}</span>
+        </div>
+        <div class="value-trio-item value-trio-primary">
+          <span class="value-trio-label">Replacement</span>
+          <span class="value-trio-amount">${formatCurrency(item.replacement_value)}</span>
+        </div>
+        <div class="value-trio-item">
+          <span class="value-trio-label">Depreciated</span>
+          <span class="value-trio-amount">${formatCurrency(item.depreciated_value || 0)}</span>
+        </div>
+      </div>
+      ${item.replacement_value_note ? `<p class="text-muted-sm value-trio-note">${escapeHtml(item.replacement_value_note)}</p>` : ''}
+      ${item.insurance_policy_note ? `<p class="text-muted-sm value-trio-note">Policy: ${escapeHtml(item.insurance_policy_note)}</p>` : ''}
+    </div>
+
+    ${!item.parent && (item.accessories || []).length ? `
+    <div class="card">
+      <div class="card-header">
+        <h3 class="section-title">Accessories &amp; Sub-items</h3>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="add-accessory" data-id="${item.id}">Add Accessory</button>
+      </div>
+      <ul class="accessory-list">
+        ${item.accessories.map(acc => `
+          <li class="accessory-list-item">
+            <button type="button" class="accessory-list-btn" data-action="view-item" data-id="${acc.id}">
+              <strong>${escapeHtml(acc.name)}</strong>
+              <span class="text-muted-sm">${escapeHtml(acc.category || '')}${acc.serial_number ? ` · ${escapeHtml(acc.serial_number)}` : ''}</span>
+              <span class="accessory-list-value">${formatCurrency(acc.replacement_value)}</span>
+            </button>
+          </li>
+        `).join('')}
+      </ul>
+    </div>
+    ` : ''}
+
+    ${!item.parent && !(item.accessories || []).length ? `
+    <div class="card accessory-empty-card">
+      <div class="card-header">
+        <h3 class="section-title">Accessories &amp; Sub-items</h3>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="add-accessory" data-id="${item.id}">Add Accessory</button>
+      </div>
+      <p class="text-muted-sm">No accessories linked yet — add cases, cables, spare tubes, etc.</p>
+    </div>
+    ` : ''}
 
     <div class="card phone-upload-card">
       <div class="card-header">
@@ -195,9 +258,6 @@ export function renderItemDetail(item) {
         <div class="detail-field"><div class="field-label">Condition</div><div class="field-value"><span class="condition-badge condition-${item.condition}">${item.condition}</span></div></div>
         <div class="detail-field"><div class="field-label">Quantity</div><div class="field-value">${item.quantity}</div></div>
         <div class="detail-field"><div class="field-label">Purchase Date</div><div class="field-value">${formatDate(item.purchase_date)}</div></div>
-        <div class="detail-field"><div class="field-label">Purchase Price</div><div class="field-value">${formatCurrency(item.purchase_price)}</div></div>
-        <div class="detail-field"><div class="field-label">Replacement Value</div><div class="field-value value-cell">${formatCurrency(item.replacement_value)}</div></div>
-        <div class="detail-field"><div class="field-label">Value Note</div><div class="field-value field-value-sm">${escapeHtml(item.replacement_value_note) || '—'}</div></div>
         <div class="detail-field"><div class="field-label">Update Checks</div><div class="field-value">${item.update_checks_enabled ? '<span class="status-on">Enabled</span>' : '<span class="status-off">Disabled</span>'}</div></div>
       </div>
       ${item.condition_notes ? `<div class="detail-field mt-1"><div class="field-label">Condition Notes</div><div class="field-value field-value-sm">${escapeHtml(item.condition_notes)}</div></div>` : ''}

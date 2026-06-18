@@ -8,10 +8,12 @@ const {
   enrichItem, setItemTags, sanitizeItemInput, itemUploadDir,
   removeItemUploadDirs, DEFAULT_CATEGORIES, DEFAULT_LOCATIONS,
   ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR,
-  addMaintenanceEntry, deleteMaintenanceEntry
+  addMaintenanceEntry, deleteMaintenanceEntry, getRacks, getSignalChains
 } = require('./db');
 const { summarizeCompleteness, computeItemCompleteness } = require('./lib/completeness');
 const { parseCsv, mapRowToItem } = require('./lib/csv-import');
+const { readSettings, writeSettings, regenerateGuestToken, isValidGuestToken } = require('./lib/studio-settings');
+const { indexManualAttachment, searchManuals, pdfParseAvailable } = require('./lib/pdf-index');
 const { fetchBrandLogoFromWeb, fetchAllInventoryBrandLogos } = require('./lib/fetch-brand-logo');
 const { getCurrentVersion, checkForUpdate } = require('./lib/version');
 const QRCode = require('qrcode');
@@ -171,6 +173,16 @@ function buildSearchQuery(params) {
     conditions.push('i.replacement_value <= @max_value');
     values.max_value = parseFloat(params.max_value);
   }
+  if (params.on_policy === '1') {
+    conditions.push('i.on_insurance_policy = 1');
+  }
+  if (params.include_accessories !== '1' && params.include_accessories !== 'true') {
+    conditions.push('(i.parent_item_id IS NULL)');
+  }
+  if (params.parent_id) {
+    conditions.push('i.parent_item_id = @parent_id');
+    values.parent_id = parseInt(params.parent_id, 10);
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const sortMap = {
@@ -201,6 +213,12 @@ function filenameFromResponse(url, headers) {
 }
 
 // --- API ---
+
+function requestBaseUrl(req) {
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const proto = req.get('x-forwarded-proto') || req.protocol;
+  return `${proto}://${host}`;
+}
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -249,6 +267,191 @@ app.get('/api/stats', (_req, res) => {
     warrantyExpiring,
     awayItems
   });
+});
+
+function guestMiddleware(req, res, next) {
+  if (!isValidGuestToken(req.params.token)) {
+    return res.status(403).json({ error: 'Guest access disabled or invalid link' });
+  }
+  next();
+}
+
+app.get('/api/settings/guest', (req, res) => {
+  const s = readSettings();
+  const base = requestBaseUrl(req);
+  res.json({
+    guestEnabled: s.guestEnabled,
+    guestToken: s.guestToken,
+    guestUrl: `${base}/guest.html?token=${s.guestToken}`,
+    pdfSearchEnabled: pdfParseAvailable
+  });
+});
+
+app.put('/api/settings/guest', (req, res) => {
+  const s = writeSettings({ guestEnabled: !!req.body.guestEnabled });
+  const base = requestBaseUrl(req);
+  res.json({
+    guestEnabled: s.guestEnabled,
+    guestToken: s.guestToken,
+    guestUrl: `${base}/guest.html?token=${s.guestToken}`
+  });
+});
+
+app.post('/api/settings/guest/regenerate', (req, res) => {
+  const s = regenerateGuestToken();
+  const base = requestBaseUrl(req);
+  res.json({
+    guestEnabled: s.guestEnabled,
+    guestToken: s.guestToken,
+    guestUrl: `${base}/guest.html?token=${s.guestToken}`
+  });
+});
+
+app.get('/api/guest/:token/health', guestMiddleware, (_req, res) => {
+  res.json({ ok: true, readOnly: true, itemCount: db.prepare('SELECT COUNT(*) as c FROM items').get().c });
+});
+
+app.get('/api/guest/:token/items', guestMiddleware, (req, res) => {
+  const { where, values, orderBy } = buildSearchQuery({ ...req.query, include_accessories: '1' });
+  res.json(db.prepare(`SELECT i.* FROM items i ${where} ORDER BY ${orderBy}`).all(values).map(enrichItem));
+});
+
+app.get('/api/guest/:token/items/:id', guestMiddleware, (req, res) => {
+  const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  res.json(enrichItem(item));
+});
+
+app.get('/api/guest/:token/stats', guestMiddleware, (_req, res) => {
+  const totals = db.prepare(`
+    SELECT COUNT(*) as item_count, COALESCE(SUM(replacement_value*quantity),0) as total_replacement FROM items
+  `).get();
+  res.json({ totals, readOnly: true });
+});
+
+app.get('/api/studio/map', (_req, res) => {
+  const locations = db.prepare(`
+    SELECT location, COUNT(*) as item_count,
+      COALESCE(SUM(replacement_value * quantity), 0) as total_value
+    FROM items WHERE parent_item_id IS NULL
+    GROUP BY location ORDER BY total_value DESC
+  `).all();
+  const zones = locations.map(loc => ({
+    ...loc,
+    items: db.prepare(`
+      SELECT id, name, category, brand, model, replacement_value, studio_status
+      FROM items WHERE location = ? AND parent_item_id IS NULL
+      ORDER BY replacement_value DESC, name ASC
+    `).all(loc.location || '')
+  }));
+  res.json({ zones });
+});
+
+app.get('/api/racks', (_req, res) => res.json(getRacks()));
+
+app.post('/api/racks', (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 150);
+  if (!name) return res.status(400).json({ error: 'Rack name required' });
+  const r = db.prepare(`
+    INSERT INTO racks (name, location, notes, sort_order)
+    VALUES (?, ?, ?, ?)
+  `).run(name, String(req.body.location || '').slice(0, 150),
+    String(req.body.notes || '').slice(0, 500), parseInt(req.body.sort_order, 10) || 0);
+  res.status(201).json(getRacks().find(x => x.id === r.lastInsertRowid));
+});
+
+app.put('/api/racks/:id', (req, res) => {
+  if (!db.prepare('SELECT id FROM racks WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Rack not found' });
+  db.prepare(`
+    UPDATE racks SET name=?, location=?, notes=?, sort_order=? WHERE id=?
+  `).run(
+    String(req.body.name || '').trim().slice(0, 150),
+    String(req.body.location || '').slice(0, 150),
+    String(req.body.notes || '').slice(0, 500),
+    parseInt(req.body.sort_order, 10) || 0,
+    req.params.id
+  );
+  res.json(getRacks().find(x => x.id === Number(req.params.id)));
+});
+
+app.delete('/api/racks/:id', (req, res) => {
+  db.prepare('DELETE FROM racks WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+app.put('/api/racks/:id/items', (req, res) => {
+  if (!db.prepare('SELECT id FROM racks WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Rack not found' });
+  const items = Array.isArray(req.body.items) ? req.body.items : [];
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM rack_items WHERE rack_id=?').run(req.params.id);
+    const ins = db.prepare('INSERT INTO rack_items (rack_id, item_id, position, slot_label) VALUES (?,?,?,?)');
+    items.forEach((row, i) => {
+      ins.run(req.params.id, row.item_id, row.position ?? i, String(row.slot_label || '').slice(0, 50));
+    });
+  });
+  tx();
+  res.json(getRacks().find(x => x.id === Number(req.params.id)));
+});
+
+app.get('/api/signal-chains', (_req, res) => res.json(getSignalChains()));
+
+app.post('/api/signal-chains', (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 150);
+  if (!name) return res.status(400).json({ error: 'Chain name required' });
+  const r = db.prepare(`
+    INSERT INTO signal_chains (name, description, sort_order) VALUES (?, ?, ?)
+  `).run(name, String(req.body.description || '').slice(0, 500), parseInt(req.body.sort_order, 10) || 0);
+  res.status(201).json(getSignalChains().find(x => x.id === r.lastInsertRowid));
+});
+
+app.put('/api/signal-chains/:id', (req, res) => {
+  if (!db.prepare('SELECT id FROM signal_chains WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Chain not found' });
+  db.prepare(`UPDATE signal_chains SET name=?, description=?, sort_order=? WHERE id=?`).run(
+    String(req.body.name || '').trim().slice(0, 150),
+    String(req.body.description || '').slice(0, 500),
+    parseInt(req.body.sort_order, 10) || 0,
+    req.params.id
+  );
+  res.json(getSignalChains().find(x => x.id === Number(req.params.id)));
+});
+
+app.delete('/api/signal-chains/:id', (req, res) => {
+  db.prepare('DELETE FROM signal_chains WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+app.put('/api/signal-chains/:id/items', (req, res) => {
+  if (!db.prepare('SELECT id FROM signal_chains WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Chain not found' });
+  const items = Array.isArray(req.body.items) ? req.body.items : [];
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM signal_chain_items WHERE chain_id=?').run(req.params.id);
+    const ins = db.prepare('INSERT INTO signal_chain_items (chain_id, item_id, position) VALUES (?,?,?)');
+    items.forEach((row, i) => ins.run(req.params.id, row.item_id, row.position ?? i));
+  });
+  tx();
+  res.json(getSignalChains().find(x => x.id === Number(req.params.id)));
+});
+
+app.get('/api/manuals/search', (req, res) => {
+  res.json(searchManuals(db, req.query.q));
+});
+
+app.post('/api/manuals/reindex', async (_req, res) => {
+  const rows = db.prepare(`
+    SELECT a.*, i.name as item_name FROM attachments a
+    JOIN items i ON i.id = a.item_id
+    WHERE a.type IN ('manual','document')
+  `).all();
+  let indexed = 0;
+  for (const row of rows) {
+    const n = await indexManualAttachment(db, row, row.item_name, UPLOADS_DIR);
+    if (n > 0) indexed++;
+  }
+  res.json({ ok: true, total: rows.length, indexed, pdfSearchEnabled: pdfParseAvailable });
 });
 
 app.get('/api/meta', (_req, res) => {
@@ -331,12 +534,6 @@ app.get('/api/items/:id', (req, res) => {
   res.json(enrichItem(item));
 });
 
-function requestBaseUrl(req) {
-  const host = req.get('x-forwarded-host') || req.get('host');
-  const proto = req.get('x-forwarded-proto') || req.protocol;
-  return `${proto}://${host}`;
-}
-
 app.get('/api/items/:id/qr', async (req, res) => {
   if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
     return res.status(404).json({ error: 'Item not found' });
@@ -371,12 +568,14 @@ app.post('/api/items', (req, res) => {
     INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
       purchase_date,purchase_price,replacement_value,replacement_value_note,
       condition,condition_notes,location,description,quantity,update_checks_enabled,
-      warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at)
+      warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
+      parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note)
     VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
       @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
       @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
       @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
-      CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END)
+      CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END,
+      @parent_item_id,@depreciated_value,@on_insurance_policy,@insurance_policy_note)
   `).run(data);
   setItemTags(result.lastInsertRowid, req.body.tags || []);
   if (data.brand) queueBrandLogoFetch(data.brand);
@@ -398,6 +597,8 @@ app.put('/api/items/:id', (req, res) => {
       quantity=@quantity,update_checks_enabled=@update_checks_enabled,
       warranty_end_date=@warranty_end_date,warranty_note=@warranty_note,
       studio_status=@studio_status,studio_status_note=@studio_status_note,
+      parent_item_id=@parent_item_id,depreciated_value=@depreciated_value,
+      on_insurance_policy=@on_insurance_policy,insurance_policy_note=@insurance_policy_note,
       value_updated_at=CASE WHEN @value_changed = 1 AND @replacement_value > 0
         THEN datetime('now') ELSE value_updated_at END,
       updated_at=datetime('now') WHERE id=@id
@@ -450,12 +651,14 @@ app.post('/api/import/csv', express.text({ type: ['text/csv', 'text/plain', 'app
       INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
         purchase_date,purchase_price,replacement_value,replacement_value_note,
         condition,condition_notes,location,description,quantity,update_checks_enabled,
-        warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at)
+        warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
+        parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note)
       VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
         @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
         @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
         @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
-        CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END)
+        CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END,
+        @parent_item_id,@depreciated_value,@on_insurance_policy,@insurance_policy_note)
     `);
 
     let imported = 0;
@@ -489,12 +692,15 @@ app.post('/api/items/:id/photos', photoUpload.array('files', 20), (req, res) => 
   res.status(201).json(created);
 });
 
-app.post('/api/items/:id/manuals', manualUpload.single('file'), (req, res) => {
+app.post('/api/items/:id/manuals', manualUpload.single('file'), async (req, res) => {
   if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
     return res.status(404).json({ error: 'Item not found' });
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const docType = req.file.mimetype === 'application/pdf' ? 'manual' : 'document';
-  res.status(201).json(insertAttachment(req.params.id, req.file, docType));
+  const att = insertAttachment(req.params.id, req.file, docType);
+  const item = db.prepare('SELECT name FROM items WHERE id=?').get(req.params.id);
+  try { await indexManualAttachment(db, att, item?.name, UPLOADS_DIR); } catch { /* ignore */ }
+  res.status(201).json(att);
 });
 
 app.post('/api/items/:id/receipts', receiptUpload.single('file'), (req, res) => {

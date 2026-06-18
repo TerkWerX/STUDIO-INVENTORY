@@ -7,6 +7,22 @@
 
 > Tracks guitars, mics, interfaces, mixers, control surfaces, monitors, pedals, and amplifiers — **not** sample libraries, loops, or software sound assets.
 
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="Studio Inventory dashboard with stats, brand carousel, and category breakdown" width="800">
+</p>
+
+<p align="center">
+  <em>Dashboard — totals, brand carousel, and studio breakdowns at a glance</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/brands.png" alt="Browse by Brand page with manufacturer logos" width="800">
+</p>
+
+<p align="center">
+  <em>Brands page — tap any logo to filter your gear by manufacturer</em>
+</p>
+
 ---
 
 ## Why Studio Inventory?
@@ -173,6 +189,8 @@ Double-click `start-studio-inventory.bat`, or add a shortcut to your Startup fol
 | `npm run fetch-logos` | Fetch missing brand logos |
 | `npm run fetch-logos:force` | Re-fetch all non-custom logos |
 | `npm run sync-brands` | Sync brand records from inventory items |
+| `npm test` | Run CI smoke test (isolated temp database) |
+| `npm run screenshots` | Capture README screenshots (server must be running) |
 
 ---
 

@@ -18,7 +18,9 @@
     "reseed": "node seed.js --force",
     "sync-brands": "node scripts/populate-logos.js",
     "fetch-logos": "node scripts/fetch-logos.js",
-    "fetch-logos:force": "node scripts/fetch-logos.js --force"
+    "fetch-logos:force": "node scripts/fetch-logos.js --force",
+    "test": "node scripts/smoke-test.js",
+    "screenshots": "node scripts/capture-screenshots.js"
   },
   "keywords": [
     "inventory",

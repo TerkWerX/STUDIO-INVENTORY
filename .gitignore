@@ -12,3 +12,4 @@ data/uploads/*
 !data/uploads/.gitkeep
 data/backups/*
 !data/backups/.gitkeep
+data/.smoke-test/

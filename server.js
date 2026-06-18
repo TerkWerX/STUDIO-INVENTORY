@@ -10,6 +10,7 @@ const {
   ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR
 } = require('./db');
 const { fetchBrandLogoFromWeb, fetchAllInventoryBrandLogos } = require('./lib/fetch-brand-logo');
+const QRCode = require('qrcode');
 
 const PORT = process.env.PORT || 3847;
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
@@ -288,6 +289,22 @@ app.get('/api/items/:id', (req, res) => {
   res.json(enrichItem(item));
 });
 
+app.get('/api/items/:id/qr', async (req, res) => {
+  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Item not found' });
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const proto = req.get('x-forwarded-proto') || req.protocol;
+  const scanUrl = `${proto}://${host}/scan/${req.params.id}`;
+  try {
+    const png = await QRCode.toBuffer(scanUrl, { type: 'png', margin: 1, width: 280, errorCorrectionLevel: 'M' });
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(png);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/items', (req, res) => {
   const data = sanitizeItemInput(req.body);
   const result = db.prepare(`
@@ -523,6 +540,10 @@ app.post('/api/import/json', (req, res) => {
 app.use((err, _req, res, _next) => {
   console.error(err);
   res.status(500).json({ error: err.message || 'Server error' });
+});
+
+app.get('/scan/:id', (req, res) => {
+  res.redirect(`/scan.html?id=${encodeURIComponent(req.params.id)}`);
 });
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

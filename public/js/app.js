@@ -7,6 +7,9 @@ import { renderBrandsPage, renderBrandItems } from './views/brands.js';
 import { renderReports, renderInsurance, generatePdf } from './views/reports.js';
 import { renderManuals } from './views/manuals.js';
 import { renderAbout, renderBackup } from './views/about.js';
+import { renderLabelsPage, bindLabelsPageEvents, printSingleItemLabel } from './views/labels.js';
+import { getDymoStatus } from './lib/dymo-labels.js';
+import { loadLabelSettings } from './lib/label-settings.js';
 
 const state = {
   view: 'dashboard',
@@ -18,7 +21,8 @@ const state = {
   editItemId: null,
   manualSearch: '',
   brands: [],
-  selectedBrand: null
+  selectedBrand: null,
+  labelPreselectId: null
 };
 
 const container = document.getElementById('view-container');
@@ -33,7 +37,27 @@ async function init() {
     setupTheme();
     setupKeyboard();
     registerServiceWorker();
-    await navigate('dashboard');
+
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get('view');
+    const id = params.get('id');
+    const edit = params.get('edit');
+    if (edit || view || id) history.replaceState(null, '', '/');
+
+    if (edit) {
+      state.editItemId = edit;
+      await navigate('item-form');
+    } else if (view === 'item-detail' && id) {
+      state.selectedItemId = id;
+      await navigate('item-detail', { id });
+    } else if (view === 'item-form') {
+      await navigate('item-form');
+    } else if (view === 'labels') {
+      if (id) state.labelPreselectId = id;
+      await navigate('labels');
+    } else {
+      await navigate('dashboard');
+    }
   } catch (err) {
     container.innerHTML = `
       <div class="empty-state">
@@ -111,7 +135,8 @@ function setActiveNav(view) {
     btn.classList.toggle('active', btn.dataset.view === view ||
       (view === 'item-detail' && btn.dataset.view === 'inventory') ||
       (view === 'item-form' && btn.dataset.view === 'item-form') ||
-      (view === 'brand-items' && btn.dataset.view === 'brands'));
+      (view === 'brand-items' && btn.dataset.view === 'brands') ||
+      (view === 'labels' && btn.dataset.view === 'labels'));
   });
 }
 
@@ -175,6 +200,23 @@ async function navigate(view, params = {}) {
         const manuals = await api.manuals();
         container.innerHTML = renderManuals(manuals, state.manualSearch);
         bindManualEvents(manuals);
+        break;
+
+      case 'labels':
+        state.items = await api.items({ sort: 'name' });
+        const dymoStatus = await getDymoStatus();
+        const labelSettings = loadLabelSettings();
+        if (!labelSettings.baseUrl) labelSettings.baseUrl = window.location.origin;
+        container.innerHTML = renderLabelsPage(state.items, labelSettings, dymoStatus, state.labelPreselectId);
+        bindLabelsPageEvents({
+          items: state.items,
+          onToast: showToast,
+          onRefreshStatus: async () => {
+            const s = await getDymoStatus();
+            if (!s.printers?.length) return;
+          }
+        });
+        state.labelPreselectId = null;
         break;
 
       case 'reports':
@@ -327,6 +369,9 @@ function bindInventoryEvents() {
 
 function bindDetailEvents(item) {
   container.querySelector('[data-nav="inventory"]')?.addEventListener('click', () => navigate('inventory'));
+  container.querySelector('[data-action="print-label"]')?.addEventListener('click', async () => {
+    await printSingleItemLabel(item, showToast);
+  });
   container.querySelector('[data-action="edit-item"]')?.addEventListener('click', () => {
     state.editItemId = item.id;
     navigate('item-form');

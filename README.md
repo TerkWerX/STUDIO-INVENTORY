@@ -50,6 +50,7 @@ Home studios accumulate serious gear fast. Studio Inventory gives you one place 
 | **Search & filters** | Full-text search, category, location, condition, tags, value range, sorting |
 | **Dashboard** | Totals, breakdowns, recent additions, high-value items, brand carousel |
 | **Brands** | Auto-fetched logos, custom uploads, tap-to-filter item cards |
+| **Owner Labels** | QR labels for DYMO LabelWriter — scan to open manuals, software, and item details |
 | **Reports** | PDF, CSV, and JSON export |
 | **Backup** | JSON + SQL dump + copy `data/uploads/` |
 | **PWA** | Installable with offline shell caching |
@@ -123,6 +124,20 @@ Your database and uploads are **local only** and excluded from git. Back them up
 3. Or copy the whole `data/` directory
 
 ---
+
+## Owner Labels (QR + DYMO)
+
+Print owner labels with QR codes for each piece of gear. Scanning with any phone opens a quick page with manuals, archived software, full details, and an edit link.
+
+1. Install **DYMO Connect** and connect your LabelWriter 450 Turbo
+2. Open **Owner Labels** in the sidebar
+3. Set **QR Base URL** to your NUC's LAN IP (e.g. `http://192.168.1.50:3847`) so phones on Wi‑Fi can reach the server
+4. Select items → **Print Selected (DYMO)** (30252 address labels recommended)
+5. Affix labels to gear
+
+**Browser fallback:** Use **Print Selected (Browser)** if DYMO Connect isn't detected — choose your LabelWriter in the Windows print dialog.
+
+From any item's detail page, click **Print Owner Label** for a one-off print.
 
 ## Brand Logos
 

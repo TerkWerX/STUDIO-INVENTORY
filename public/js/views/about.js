@@ -18,6 +18,7 @@ export function renderAbout() {
         <li><strong>Backup</strong> — Export and import your entire database.</li>
         <li><strong>Software Archive</strong> — Download and store drivers/firmware from manufacturer URLs.</li>
         <li><strong>Auto-Estimate</strong> — Search Reverb/eBay for current replacement values.</li>
+        <li><strong>Owner Labels</strong> — Print QR labels on your DYMO LabelWriter. Scan with any phone to open manuals, software, and item details.</li>
       </ul>
       <p style="margin-top:1rem;color:var(--text-muted)">This app tracks <strong>physical hardware only</strong> — not sample libraries or sound assets.</p>
     </div>
@@ -53,6 +54,18 @@ export function renderAbout() {
         Use the <strong>Replacement Value Note</strong> to record your source (e.g., manufacturer MSRP, Reverb average, insurance appraisal date).
         For insurance reports, accurate serial numbers and photos are especially important.
       </p>
+    </div>
+
+    <div class="card">
+      <h3 class="section-title">Owner Labels &amp; QR Codes</h3>
+      <ol style="list-style:decimal;padding-left:1.5rem;color:var(--text-secondary);line-height:2">
+        <li>Install <strong>DYMO Connect</strong> and connect your LabelWriter 450 Turbo.</li>
+        <li>Open <strong>Owner Labels</strong> in the sidebar.</li>
+        <li>Set <strong>QR Base URL</strong> to your NUC's LAN address (e.g. <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://192.168.1.50:3847</code>) so phones on Wi‑Fi can scan labels.</li>
+        <li>Select gear and click <strong>Print Selected (DYMO)</strong>. Use 30252 address labels for best results.</li>
+        <li>Affix labels to gear. Scanning opens a quick page with manuals, drivers, edit link, and full details.</li>
+      </ol>
+      <p style="margin-top:1rem;color:var(--text-muted)">If DYMO software isn't available, use <strong>Print Selected (Browser)</strong> and choose your LabelWriter in the Windows print dialog.</p>
     </div>
 
     <div class="card">

@@ -112,6 +112,7 @@ export function renderItemDetail(item) {
       </div>
       <div class="btn-group">
         <button type="button" class="btn btn-secondary" data-nav="inventory">Back</button>
+        <button type="button" class="btn btn-ghost" data-action="print-label" data-id="${item.id}">Print Owner Label</button>
         <button type="button" class="btn btn-accent" data-action="auto-estimate" data-brand="${escapeHtml(item.brand)}" data-model="${escapeHtml(item.model)}" data-name="${escapeHtml(item.name)}">Auto-Estimate Value</button>
         <button type="button" class="btn btn-primary" data-action="edit-item" data-id="${item.id}">Edit</button>
         <button type="button" class="btn btn-danger" data-action="delete-item" data-id="${item.id}">Delete</button>

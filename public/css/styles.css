@@ -1134,7 +1134,7 @@ tbody tr:hover { background: var(--bg-hover); }
 
 /* Print styles */
 @media print {
-  .sidebar, .backup-banner, .toolbar, .btn, .modal-overlay, .toast-container { display: none !important; }
+  .sidebar, .backup-banner, .update-banner, .toolbar, .btn, .modal-overlay, .toast-container { display: none !important; }
   .main-content { padding: 0; max-height: none; }
   body { background: #fff; color: #000; }
   .card, .stat-card { box-shadow: none; border: 1px solid #ccc; }

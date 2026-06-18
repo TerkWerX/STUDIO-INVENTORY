@@ -19,6 +19,7 @@ export function renderAbout() {
         <li><strong>Software Archive</strong> — Download and store drivers/firmware from manufacturer URLs.</li>
         <li><strong>Auto-Estimate</strong> — Search Reverb/eBay for current replacement values.</li>
         <li><strong>Owner Labels</strong> — Print QR labels on your DYMO LabelWriter. Scan with any phone to open manuals, software, and item details.</li>
+        <li><strong>Binder Print</strong> — Print a complete 3-ring binder (cover, index, one page per item) or single gear pages as you add equipment. Manual PDFs print only when you choose.</li>
       </ul>
       <p style="margin-top:1rem;color:var(--text-muted)">This app tracks <strong>physical hardware only</strong> — not sample libraries or sound assets.</p>
     </div>

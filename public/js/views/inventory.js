@@ -117,6 +117,7 @@ export function renderItemDetail(item) {
       </div>
       <div class="btn-group">
         <button type="button" class="btn btn-secondary" data-nav="inventory">Back</button>
+        <button type="button" class="btn btn-ghost" data-action="print-binder-page" data-id="${item.id}">Print Binder Page</button>
         <button type="button" class="btn btn-ghost" data-action="print-label" data-id="${item.id}">Print Owner Label</button>
         <button type="button" class="btn btn-accent" data-action="auto-estimate" data-brand="${escapeHtml(item.brand)}" data-model="${escapeHtml(item.model)}" data-name="${escapeHtml(item.name)}">Auto-Estimate Value</button>
         <button type="button" class="btn btn-primary" data-action="edit-item" data-id="${item.id}">Edit</button>
@@ -203,6 +204,7 @@ export function renderItemDetail(item) {
               </div>
               <div class="btn-group">
                 <a href="${fileUrl(a.relative_path)}" target="_blank" class="btn btn-sm btn-primary">Open</a>
+                ${a.mime_type === 'application/pdf' ? `<button type="button" class="btn btn-sm btn-ghost" data-action="print-manual-pdf" data-path="${escapeHtml(a.relative_path)}" data-name="${escapeHtml(a.original_name)}">Print PDF</button>` : ''}
                 <button type="button" class="btn btn-sm btn-danger" data-action="delete-attachment" data-id="${a.id}">Remove</button>
               </div>
             </div>

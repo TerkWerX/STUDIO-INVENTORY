@@ -32,7 +32,14 @@ export function renderManuals(manuals, searchQuery = '') {
                 <td><span class="doc-icon-inline">📄</span> <strong>${escapeHtml(m.original_name)}</strong></td>
                 <td><button type="button" class="btn btn-ghost btn-sm" data-action="view-item" data-id="${m.item_id}">${escapeHtml(m.item_name)}</button></td>
                 <td>${formatDate(m.created_at?.split(' ')[0])}</td>
-                <td><a href="${fileUrl(m.relative_path)}" target="_blank" class="btn btn-sm btn-primary">Download</a></td>
+                <td>
+                  <div class="btn-group">
+                    <a href="${fileUrl(m.relative_path)}" target="_blank" class="btn btn-sm btn-primary">Open</a>
+                    ${(m.mime_type === 'application/pdf' || (m.original_name || '').toLowerCase().endsWith('.pdf'))
+                      ? `<button type="button" class="btn btn-sm btn-ghost" data-action="print-manual-pdf" data-path="${escapeHtml(m.relative_path)}" data-name="${escapeHtml(m.original_name)}">Print PDF</button>`
+                      : ''}
+                  </div>
+                </td>
               </tr>
             `).join('')}
           </tbody>

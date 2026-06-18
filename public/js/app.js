@@ -11,6 +11,8 @@ import { renderReports, renderInsurance, generatePdf } from './views/reports.js'
 import { renderManuals } from './views/manuals.js';
 import { renderAbout, renderBackup } from './views/about.js';
 import { renderLabelsPage, bindLabelsPageEvents, printSingleItemLabel } from './views/labels.js';
+import { renderBinderPage, getBinderOptionsFromDom, getSelectedBinderItemIds } from './views/binder.js';
+import { printBinderDocument, printBinderItems, openManualForPrint } from './lib/binder-print.js';
 import { getDymoStatus } from './lib/dymo-labels.js';
 import { loadLabelSettings } from './lib/label-settings.js';
 
@@ -266,6 +268,14 @@ async function navigate(view, params = {}) {
         state.labelPreselectId = null;
         break;
 
+      case 'binder':
+        state.items = await api.items({ sort: 'name' });
+        state.stats = state.stats || await api.stats();
+        const binderSettings = loadLabelSettings();
+        container.innerHTML = renderBinderPage(state.items, state.stats, binderSettings.studioName);
+        bindBinderEvents();
+        break;
+
       case 'reports':
         state.items = await api.items({ sort: 'name' });
         state.stats = state.stats || await api.stats();
@@ -416,8 +426,29 @@ function bindInventoryEvents() {
 
 function bindDetailEvents(item) {
   container.querySelector('[data-nav="inventory"]')?.addEventListener('click', () => navigate('inventory'));
+  container.querySelector('[data-action="print-binder-page"]')?.addEventListener('click', () => {
+    try {
+      const settings = loadLabelSettings();
+      printBinderItems([item], { studioName: settings.studioName });
+      showToast('Binder page opened — use Print in the dialog', 'info');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
   container.querySelector('[data-action="print-label"]')?.addEventListener('click', async () => {
     await printSingleItemLabel(item, showToast);
+  });
+
+  container.querySelectorAll('[data-action="print-manual-pdf"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      try {
+        openManualForPrint(btn.dataset.path, btn.dataset.name);
+        showToast('Manual opened — click Print Manual when ready', 'info');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
   });
   container.querySelector('[data-action="edit-item"]')?.addEventListener('click', () => {
     state.editItemId = item.id;
@@ -579,6 +610,23 @@ function bindFormEvents() {
         showToast('Item added', 'success');
         if (data.brand) fetchLogoForBrand(data.brand);
         state.selectedItemId = created.id;
+
+        const printPage = await showModal({
+          title: 'Print binder page?',
+          message: `"${data.name}" was added. Print a gear page now for your 3-ring binder?`,
+          confirmText: 'Print Page',
+          cancelText: 'Not Now'
+        });
+        if (printPage) {
+          try {
+            const settings = loadLabelSettings();
+            printBinderItems([created], { studioName: settings.studioName });
+            showToast('Binder page opened', 'info');
+          } catch (err) {
+            showToast(err.message, 'error');
+          }
+        }
+
         navigate('item-detail', { id: created.id });
       }
     } catch (err) {
@@ -603,6 +651,100 @@ function bindManualEvents(manuals) {
     el.addEventListener('click', () => {
       state.selectedItemId = el.dataset.id;
       navigate('item-detail', { id: el.dataset.id });
+    });
+  });
+
+  container.querySelectorAll('[data-action="print-manual-pdf"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      try {
+        openManualForPrint(btn.dataset.path, btn.dataset.name);
+        showToast('Manual opened — click Print Manual when ready', 'info');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+}
+
+function bindBinderEvents() {
+  const itemById = (id) => state.items.find(i => String(i.id) === String(id));
+
+  const runPrint = (items, partial = {}) => {
+    if (!items.length) {
+      showToast('No items selected', 'error');
+      return;
+    }
+    try {
+      const opts = { ...getBinderOptionsFromDom(), ...partial, items, stats: state.stats };
+      printBinderDocument(opts);
+      showToast(`Opened ${items.length} page${items.length !== 1 ? 's' : ''} for printing`, 'info');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  document.getElementById('binder-print-full')?.addEventListener('click', () => {
+    runPrint(state.items, { includeCover: true, includeIndex: true });
+  });
+
+  document.getElementById('binder-print-selected')?.addEventListener('click', () => {
+    const ids = getSelectedBinderItemIds();
+    const items = ids.map(itemById).filter(Boolean);
+    runPrint(items, { includeCover: false, includeIndex: false });
+  });
+
+  document.getElementById('binder-print-index')?.addEventListener('click', () => {
+    if (!state.items.length) {
+      showToast('No items in inventory', 'error');
+      return;
+    }
+    try {
+      const opts = getBinderOptionsFromDom();
+      printBinderDocument({
+        items: state.items,
+        stats: state.stats,
+        studioName: opts.studioName,
+        includeCover: false,
+        includeIndex: true,
+        includeItemPages: false,
+        includePhotos: false
+      });
+      showToast('Index page opened for printing', 'info');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('binder-select-all')?.addEventListener('click', () => {
+    document.querySelectorAll('.binder-item-check').forEach(el => { el.checked = true; });
+  });
+
+  document.getElementById('binder-select-none')?.addEventListener('click', () => {
+    document.querySelectorAll('.binder-item-check').forEach(el => { el.checked = false; });
+  });
+
+  container.querySelectorAll('[data-action="binder-print-one"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = itemById(btn.dataset.id);
+      if (!item) return;
+      try {
+        const opts = getBinderOptionsFromDom();
+        printBinderItems([item], opts);
+        showToast('Binder page opened', 'info');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+
+  container.querySelectorAll('[data-action="binder-print-manual"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      try {
+        openManualForPrint(btn.dataset.path, btn.dataset.name);
+        showToast('Manual opened — click Print Manual when ready', 'info');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
     });
   });
 }

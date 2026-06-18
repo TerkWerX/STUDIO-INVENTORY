@@ -10,7 +10,8 @@ const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 
 for (const dir of [DATA_DIR, UPLOADS_DIR, path.join(UPLOADS_DIR, 'photos'),
   path.join(UPLOADS_DIR, 'manuals'), path.join(UPLOADS_DIR, 'software'),
-  path.join(UPLOADS_DIR, 'logos'), path.join(DATA_DIR, 'backups')]) {
+  path.join(UPLOADS_DIR, 'receipts'), path.join(UPLOADS_DIR, 'logos'),
+  path.join(DATA_DIR, 'backups')]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -38,6 +39,12 @@ function runMigrations() {
   const itemCols = db.prepare('PRAGMA table_info(items)').all().map(c => c.name);
   if (!itemCols.includes('update_checks_enabled')) {
     db.exec('ALTER TABLE items ADD COLUMN update_checks_enabled INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!itemCols.includes('warranty_end_date')) {
+    db.exec("ALTER TABLE items ADD COLUMN warranty_end_date TEXT DEFAULT ''");
+  }
+  if (!itemCols.includes('warranty_note')) {
+    db.exec("ALTER TABLE items ADD COLUMN warranty_note TEXT DEFAULT ''");
   }
 
   const attCols = db.prepare('PRAGMA table_info(attachments)').all().map(c => c.name);
@@ -197,7 +204,8 @@ function enrichItem(item) {
     attachments,
     photos: attachments.filter(a => a.type === 'photo'),
     manuals: attachments.filter(a => a.type === 'manual' || a.type === 'document'),
-    software: attachments.filter(a => a.type === 'software')
+    software: attachments.filter(a => a.type === 'software'),
+    receipts: attachments.filter(a => a.type === 'receipt')
   };
 }
 
@@ -247,19 +255,21 @@ function sanitizeItemInput(body) {
     location: str(body.location, 150),
     description: str(body.description, 5000),
     quantity: qty(body.quantity),
-    update_checks_enabled: updateChecks
+    update_checks_enabled: updateChecks,
+    warranty_end_date: str(body.warranty_end_date, 20),
+    warranty_note: str(body.warranty_note, 500)
   };
 }
 
 function itemUploadDir(itemId, type) {
-  const sub = { photo: 'photos', manual: 'manuals', document: 'manuals', software: 'software' }[type] || 'manuals';
+  const sub = { photo: 'photos', manual: 'manuals', document: 'manuals', software: 'software', receipt: 'receipts' }[type] || 'manuals';
   const dir = path.join(UPLOADS_DIR, sub, String(itemId));
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return { dir, sub };
 }
 
 function removeItemUploadDirs(itemId) {
-  for (const sub of ['photos', 'manuals', 'software']) {
+  for (const sub of ['photos', 'manuals', 'software', 'receipts']) {
     const dir = path.join(UPLOADS_DIR, sub, String(itemId));
     if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
   }

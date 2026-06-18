@@ -77,6 +77,14 @@ const manualUpload = createUploader('manual', {
   }
 });
 
+const receiptUpload = createUploader('receipt', {
+  maxSize: 25 * 1024 * 1024,
+  filter: (file, cb) => {
+    const ok = file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/');
+    cb(null, ok);
+  }
+});
+
 const softwareUpload = createUploader('software', { maxSize: MAX_FILE_SIZE });
 
 const logoUpload = multer({
@@ -98,7 +106,7 @@ const logoUpload = multer({
 });
 
 function insertAttachment(itemId, file, type, extra = {}) {
-  const sub = { photo: 'photos', manual: 'manuals', document: 'manuals', software: 'software' }[type] || 'manuals';
+  const sub = { photo: 'photos', manual: 'manuals', document: 'manuals', software: 'software', receipt: 'receipts' }[type] || 'manuals';
   const relativePath = `${sub}/${itemId}/${file.filename}`;
   const result = db.prepare(`
     INSERT INTO attachments (
@@ -310,10 +318,12 @@ app.post('/api/items', (req, res) => {
   const result = db.prepare(`
     INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
       purchase_date,purchase_price,replacement_value,replacement_value_note,
-      condition,condition_notes,location,description,quantity,update_checks_enabled)
+      condition,condition_notes,location,description,quantity,update_checks_enabled,
+      warranty_end_date,warranty_note)
     VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
       @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
-      @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled)
+      @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
+      @warranty_end_date,@warranty_note)
   `).run(data);
   setItemTags(result.lastInsertRowid, req.body.tags || []);
   if (data.brand) queueBrandLogoFetch(data.brand);
@@ -331,6 +341,7 @@ app.put('/api/items/:id', (req, res) => {
       replacement_value_note=@replacement_value_note,condition=@condition,
       condition_notes=@condition_notes,location=@location,description=@description,
       quantity=@quantity,update_checks_enabled=@update_checks_enabled,
+      warranty_end_date=@warranty_end_date,warranty_note=@warranty_note,
       updated_at=datetime('now') WHERE id=@id
   `).run({ ...data, id: req.params.id });
   setItemTags(req.params.id, req.body.tags || []);
@@ -360,6 +371,15 @@ app.post('/api/items/:id/manuals', manualUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const docType = req.file.mimetype === 'application/pdf' ? 'manual' : 'document';
   res.status(201).json(insertAttachment(req.params.id, req.file, docType));
+});
+
+app.post('/api/items/:id/receipts', receiptUpload.single('file'), (req, res) => {
+  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Item not found' });
+  if (!req.file) return res.status(400).json({ error: 'No receipt file uploaded' });
+  res.status(201).json(insertAttachment(req.params.id, req.file, 'receipt', {
+    description: String(req.body.description || '').slice(0, 500)
+  }));
 });
 
 app.post('/api/items/:id/software/upload', softwareUpload.single('file'), (req, res) => {

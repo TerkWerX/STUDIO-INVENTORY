@@ -1,6 +1,6 @@
 import {
   formatCurrency, formatDate, escapeHtml, fileUrl, brandLogoHtml, isDriverCategory,
-  buildDriverSearchUrl, buildValueEstimateUrl, openLightbox
+  buildDriverSearchUrl, buildValueEstimateUrl, openLightbox, renderWarrantyStrip
 } from '../utils.js';
 
 export function renderInventory(items, meta, filters) {
@@ -102,6 +102,7 @@ export function renderItemDetail(item) {
   const photos = item.photos || [];
   const manuals = item.manuals || [];
   const software = item.software || [];
+  const receipts = item.receipts || [];
   const showDriverSection = isDriverCategory(item.category) || software.length > 0;
 
   const brandDisplay = item.brand
@@ -267,6 +268,37 @@ export function renderItemDetail(item) {
       ` : '<p class="text-muted" style="margin-top:1rem">No software archived yet.</p>'}
     </div>
     ` : ''}
+
+    <div class="item-purchase-footer">
+      ${renderWarrantyStrip(item)}
+      <div class="card receipts-card">
+        <div class="card-header receipts-card-header">
+          <h3 class="section-title">Digital Receipts</h3>
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+            Upload Receipt<input type="file" accept=".pdf,application/pdf,image/*" data-action="upload-receipt" data-id="${item.id}" hidden>
+          </label>
+        </div>
+        <p class="text-muted-sm receipts-hint">Store purchase receipts (PDF or photo) for insurance and warranty claims.</p>
+        ${receipts.length ? `
+          <div class="receipt-list">
+            ${receipts.map(r => `
+              <div class="receipt-item">
+                <span class="receipt-icon">${r.mime_type === 'application/pdf' ? '📄' : '🧾'}</span>
+                <div class="receipt-info">
+                  <strong>${escapeHtml(r.original_name)}</strong>
+                  ${r.description ? `<span class="text-muted-sm">${escapeHtml(r.description)}</span>` : ''}
+                  <span class="text-muted-sm">Added ${formatDate(r.created_at?.split(' ')[0])}</span>
+                </div>
+                <div class="btn-group">
+                  <a href="${fileUrl(r.relative_path)}" target="_blank" class="btn btn-sm btn-primary">Open</a>
+                  <button type="button" class="btn btn-sm btn-danger" data-action="delete-attachment" data-id="${r.id}">Remove</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        ` : '<p class="text-muted receipts-empty">No receipts attached. Upload a PDF or photo of your purchase receipt.</p>'}
+      </div>
+    </div>
   `;
 }
 

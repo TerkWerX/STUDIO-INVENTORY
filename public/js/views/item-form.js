@@ -7,7 +7,7 @@ export function renderItemForm(item, meta) {
     serial_number: '', year: '', purchase_date: '', purchase_price: 0,
     replacement_value: 0, replacement_value_note: '', condition: 'Good',
     condition_notes: '', location: '', description: '', quantity: 1,
-    update_checks_enabled: true, tags: []
+    update_checks_enabled: true, warranty_end_date: '', warranty_note: '', tags: []
   };
   const tagNames = (data.tags || []).map(t => typeof t === 'string' ? t : t.name);
   const checksOn = data.update_checks_enabled !== false && data.update_checks_enabled !== 0;
@@ -83,6 +83,15 @@ export function renderItemForm(item, meta) {
           <input type="number" id="purchase_price" min="0" step="0.01" value="${data.purchase_price || 0}">
         </div>
         <div class="form-group">
+          <label for="warranty_end_date">Warranty Ends</label>
+          <input type="date" id="warranty_end_date" value="${escapeHtml(data.warranty_end_date || '')}">
+          <p class="text-muted-sm" style="margin-top:0.35rem">Leave blank if unknown or expired/not applicable.</p>
+        </div>
+        <div class="form-group">
+          <label for="warranty_note">Warranty Note</label>
+          <input type="text" id="warranty_note" value="${escapeHtml(data.warranty_note || '')}" placeholder="e.g. Sweetwater 2-year, manufacturer 1-year">
+        </div>
+        <div class="form-group">
           <label for="replacement_value">Replacement Value ($)</label>
           <div style="display:flex;gap:0.5rem;align-items:stretch">
             <input type="number" id="replacement_value" min="0" step="0.01" value="${data.replacement_value || 0}" style="flex:1">
@@ -146,6 +155,8 @@ export function collectFormData() {
     quantity: document.getElementById('quantity').value,
     purchase_date: document.getElementById('purchase_date').value,
     purchase_price: document.getElementById('purchase_price').value,
+    warranty_end_date: document.getElementById('warranty_end_date').value,
+    warranty_note: document.getElementById('warranty_note').value,
     replacement_value: document.getElementById('replacement_value').value,
     replacement_value_note: document.getElementById('replacement_value_note').value,
     condition_notes: document.getElementById('condition_notes').value,

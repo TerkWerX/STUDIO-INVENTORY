@@ -1,4 +1,4 @@
-const CACHE = 'studio-inventory-v9';
+const CACHE = 'studio-inventory-v10';
 const ASSETS = [
   '/',
   '/index.html',

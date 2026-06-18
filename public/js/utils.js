@@ -13,6 +13,72 @@ export function formatDate(dateStr) {
   }
 }
 
+/** Warranty countdown from YYYY-MM-DD end date. */
+export function getWarrantyStatus(endDateStr) {
+  if (!endDateStr) return { status: 'none' };
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(endDateStr.includes('T') ? endDateStr : `${endDateStr}T00:00:00`);
+  if (Number.isNaN(end.getTime())) return { status: 'none' };
+
+  const msPerDay = 86400000;
+  const daysLeft = Math.round((end - today) / msPerDay);
+
+  if (daysLeft < 0) {
+    return {
+      status: 'expired',
+      daysLeft,
+      daysAgo: Math.abs(daysLeft),
+      endDate: endDateStr,
+      label: `Expired ${Math.abs(daysLeft)} day${Math.abs(daysLeft) !== 1 ? 's' : ''} ago`
+    };
+  }
+  if (daysLeft === 0) {
+    return { status: 'expires-today', daysLeft: 0, endDate: endDateStr, label: 'Expires today' };
+  }
+  return {
+    status: 'active',
+    daysLeft,
+    endDate: endDateStr,
+    label: `${daysLeft} day${daysLeft !== 1 ? 's' : ''} remaining`
+  };
+}
+
+export function renderWarrantyStrip(item) {
+  const w = getWarrantyStatus(item.warranty_end_date);
+  const note = item.warranty_note ? escapeHtml(item.warranty_note) : '';
+
+  if (w.status === 'none') {
+    return `
+      <div class="warranty-strip warranty-none">
+        <span class="warranty-strip-label">Warranty</span>
+        <span class="warranty-strip-value text-muted">Not recorded</span>
+        ${note ? `<span class="warranty-strip-note">${note}</span>` : ''}
+      </div>`;
+  }
+
+  const statusClass = {
+    active: 'warranty-active',
+    'expires-today': 'warranty-soon',
+    expired: 'warranty-expired'
+  }[w.status] || 'warranty-none';
+
+  const countdown = w.status === 'expired'
+    ? `${w.daysAgo} day${w.daysAgo !== 1 ? 's' : ''} ago`
+    : w.status === 'expires-today'
+      ? 'Today'
+      : `${w.daysLeft}d`;
+
+  return `
+    <div class="warranty-strip ${statusClass}">
+      <span class="warranty-strip-label">Warranty</span>
+      <span class="warranty-strip-countdown">${countdown}</span>
+      <span class="warranty-strip-detail">${escapeHtml(w.label)} · ends ${formatDate(w.endDate)}</span>
+      ${note ? `<span class="warranty-strip-note">${note}</span>` : ''}
+    </div>`;
+}
+
 export function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str ?? '';

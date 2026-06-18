@@ -437,6 +437,17 @@ function bindDetailEvents(item) {
     e.target.value = '';
   });
 
+  container.querySelector('[data-action="upload-receipt"]')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      await api.uploadReceipt(item.id, file);
+      showToast('Receipt uploaded', 'success');
+      navigate('item-detail', { id: item.id });
+    } catch (err) { showToast(err.message, 'error'); }
+    e.target.value = '';
+  });
+
   container.querySelector('[data-action="upload-manual"]')?.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;

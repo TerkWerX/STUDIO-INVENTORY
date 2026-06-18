@@ -33,6 +33,12 @@ export const api = {
     fd.append('file', file);
     return request(`/items/${itemId}/manuals`, { method: 'POST', body: fd });
   },
+  uploadReceipt: (itemId, file, description = '') => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (description) fd.append('description', description);
+    return request(`/items/${itemId}/receipts`, { method: 'POST', body: fd });
+  },
   uploadSoftware: (itemId, file, version, description) => {
     const fd = new FormData();
     fd.append('file', file);

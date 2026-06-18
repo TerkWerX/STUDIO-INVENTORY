@@ -61,7 +61,20 @@ Home studios accumulate serious gear fast. Studio Inventory gives you one place 
 
 ---
 
-## Quick Start
+## Download (Windows & Mac — no Node required)
+
+Pre-built packages are on the **[Releases](https://github.com/TerkWerX/STUDIO-INVENTORY/releases)** page:
+
+| Platform | Download | How to run |
+|----------|----------|------------|
+| **Windows** | `Studio-Inventory-v…-Windows.zip` | Extract → double-click **Start Studio Inventory.bat** (or **Install Studio Inventory.bat** for Desktop shortcut) |
+| **macOS** | `Studio-Inventory-v…-macOS.zip` or `.dmg` | Extract / open DMG → double-click **Start Studio Inventory.command** (or **Install Studio Inventory.command** to copy to Applications) |
+
+These bundles include Node dependencies — your friends do **not** need to install Node.js or run `npm install`.
+
+---
+
+## Quick Start (developers / git clone)
 
 **Requirements:** [Node.js](https://nodejs.org/) 18+
 

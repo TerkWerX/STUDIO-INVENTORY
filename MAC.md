@@ -23,15 +23,31 @@ Everything runs in your browser at **http://localhost:3847** after a one-time se
 | Requirement | Details |
 |-------------|---------|
 | **macOS** | Any recent version (Monterey, Ventura, Sonoma, Sequoia, etc.) |
-| **Node.js 18+** | Free runtime — [download LTS from nodejs.org](https://nodejs.org) |
-| **Terminal** | Built into Mac — find it in **Applications → Utilities → Terminal** |
 | **Disk space** | A few hundred MB for the app; more for photos and PDFs |
 
 You do **not** need Xcode, Homebrew, or a paid developer account.
 
 ---
 
-## Install (about 5 minutes)
+## Easiest install — download the Mac release (recommended)
+
+No Terminal or Node.js required.
+
+1. Go to **[GitHub Releases](https://github.com/TerkWerX/STUDIO-INVENTORY/releases)**
+2. Download **`Studio-Inventory-v…-macOS.dmg`** (or the `.zip`)
+3. Open the DMG or extract the ZIP
+4. Double-click **`Start Studio Inventory.command`**
+5. If macOS warns about an unidentified developer, **right-click → Open** once
+
+**Optional:** run **`Install Studio Inventory.command`** to copy the app to `~/Applications/Studio Inventory` and add a Desktop shortcut.
+
+Your browser opens at **http://localhost:3847** automatically.
+
+---
+
+## Developer install (git clone + Node.js)
+
+Use this path if you want the latest `main` branch or plan to contribute.
 
 ### Step 1 — Install Node.js
 

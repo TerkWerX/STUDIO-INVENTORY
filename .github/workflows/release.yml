@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev
+
+      - name: Package Windows release
+        run: node scripts/package-release.js win dist/studio-inventory-win
+
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/studio-inventory-win -DestinationPath dist/Studio-Inventory-v${{ github.event.release.tag_name }}-Windows.zip
+
+      - name: Upload Windows asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Studio-Inventory-v${{ github.event.release.tag_name }}-Windows.zip
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev
+
+      - name: Package macOS release
+        run: node scripts/package-release.js mac dist/studio-inventory-mac
+
+      - name: Create ZIP
+        run: |
+          cd dist
+          zip -r "Studio-Inventory-v${{ github.event.release.tag_name }}-macOS.zip" studio-inventory-mac
+
+      - name: Create DMG
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VOL="Studio Inventory ${TAG#v}"
+          DMG="dist/Studio-Inventory-${TAG}-macOS.dmg"
+          hdiutil create -volname "$VOL" -srcfolder dist/studio-inventory-mac -ov -format UDZO "$DMG"
+
+      - name: Upload macOS assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Studio-Inventory-v${{ github.event.release.tag_name }}-macOS.zip
+            dist/Studio-Inventory-v${{ github.event.release.tag_name }}-macOS.dmg

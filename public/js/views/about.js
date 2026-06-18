@@ -20,6 +20,11 @@ export function renderAbout() {
         <li><strong>Auto-Estimate</strong> — Search Reverb/eBay for current replacement values.</li>
         <li><strong>Owner Labels</strong> — Print QR labels on your DYMO LabelWriter. Scan with any phone to open manuals, software, and item details.</li>
         <li><strong>Binder Print</strong> — Print a complete 3-ring binder (cover, index, one page per item) or single gear pages as you add equipment. Manual PDFs print only when you choose.</li>
+        <li><strong>Documentation checklist</strong> — Dashboard and each item show what's still missing (photo, serial, receipt, manual, current value).</li>
+        <li><strong>Maintenance log</strong> — Service history per item (repairs, tubes, calibration).</li>
+        <li><strong>Studio status</strong> — Mark gear as loaned, in repair, storage, or away.</li>
+        <li><strong>Phone photo upload</strong> — Scan QR on an item to add photos from your phone on the same Wi‑Fi.</li>
+        <li><strong>CSV bulk import</strong> — Import dozens of items from a spreadsheet on the Backup page.</li>
       </ul>
       <p style="margin-top:1rem;color:var(--text-muted)">This app tracks <strong>physical hardware only</strong> — not sample libraries or sound assets.</p>
     </div>
@@ -119,7 +124,28 @@ export function renderBackup() {
     </div>
 
     <div class="card">
-      <h3 class="section-title">Import Data</h3>
+      <h3 class="section-title">Bulk Import (CSV)</h3>
+      <p style="color:var(--text-secondary);margin-bottom:1rem">
+        Import many items at once from a spreadsheet. First row must be headers. Supported columns:
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">name</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">brand</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">model</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">serial_number</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">category</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">location</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">replacement_value</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">tags</code> (semicolon-separated), and more.
+      </p>
+      <label class="btn btn-primary" style="cursor:pointer;margin-bottom:1rem">
+        Import CSV File
+        <input type="file" id="import-csv-file" accept=".csv,text/csv" hidden>
+      </label>
+      <p id="import-csv-status" style="color:var(--text-muted)"></p>
+      <button type="button" class="btn btn-ghost btn-sm" id="download-csv-template">Download CSV Template</button>
+    </div>
+
+    <div class="card">
+      <h3 class="section-title">Import Data (JSON)</h3>
       <p style="color:var(--text-secondary);margin-bottom:1rem">
         Restore from a previously exported JSON file. Choose whether to merge or replace all existing data.
       </p>

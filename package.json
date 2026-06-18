@@ -1,6 +1,6 @@
 {
   "name": "studio-inventory",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Local inventory management for physical musical instruments and audio hardware — optimized for home studios and 4K TV displays",
   "main": "server.js",
   "author": "TerkWerX",

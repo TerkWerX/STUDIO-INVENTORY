@@ -7,8 +7,11 @@ const {
   db, DB_PATH, DATA_DIR, UPLOADS_DIR, initSchema,
   enrichItem, setItemTags, sanitizeItemInput, itemUploadDir,
   removeItemUploadDirs, DEFAULT_CATEGORIES, DEFAULT_LOCATIONS,
-  ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR
+  ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR,
+  addMaintenanceEntry, deleteMaintenanceEntry
 } = require('./db');
+const { summarizeCompleteness, computeItemCompleteness } = require('./lib/completeness');
+const { parseCsv, mapRowToItem } = require('./lib/csv-import');
 const { fetchBrandLogoFromWeb, fetchAllInventoryBrandLogos } = require('./lib/fetch-brand-logo');
 const { getCurrentVersion, checkForUpdate } = require('./lib/version');
 const QRCode = require('qrcode');
@@ -218,12 +221,33 @@ app.get('/api/stats', (_req, res) => {
       COALESCE(SUM(purchase_price*quantity),0) as total_purchase,
       COALESCE(SUM(replacement_value*quantity),0) as total_replacement FROM items
   `).get();
+  const allItems = db.prepare('SELECT * FROM items ORDER BY name').all().map(enrichItem);
+  const completeness = summarizeCompleteness(allItems);
+  const warrantyExpiring = db.prepare(`
+    SELECT id, name, category, warranty_end_date, warranty_note, replacement_value
+    FROM items
+    WHERE warranty_end_date != ''
+      AND date(warranty_end_date) >= date('now')
+      AND date(warranty_end_date) <= date('now', '+30 days')
+    ORDER BY warranty_end_date ASC
+    LIMIT 15
+  `).all();
+  const awayItems = db.prepare(`
+    SELECT id, name, category, studio_status, studio_status_note, location
+    FROM items
+    WHERE studio_status != 'in_studio'
+    ORDER BY name ASC
+    LIMIT 20
+  `).all();
   res.json({
     totals,
     byCategory: db.prepare(`SELECT category, COUNT(*) as count, COALESCE(SUM(replacement_value*quantity),0) as total_value FROM items GROUP BY category ORDER BY total_value DESC`).all(),
     byLocation: db.prepare(`SELECT location, COUNT(*) as count, COALESCE(SUM(replacement_value*quantity),0) as total_value FROM items GROUP BY location ORDER BY count DESC`).all(),
     recent: db.prepare(`SELECT id,name,category,replacement_value,created_at FROM items ORDER BY created_at DESC LIMIT 5`).all(),
-    highValue: db.prepare(`SELECT id,name,category,replacement_value,serial_number FROM items WHERE replacement_value>=500 ORDER BY replacement_value DESC LIMIT 10`).all()
+    highValue: db.prepare(`SELECT id,name,category,replacement_value,serial_number FROM items WHERE replacement_value>=500 ORDER BY replacement_value DESC LIMIT 10`).all(),
+    completeness,
+    warrantyExpiring,
+    awayItems
   });
 });
 
@@ -307,14 +331,32 @@ app.get('/api/items/:id', (req, res) => {
   res.json(enrichItem(item));
 });
 
+function requestBaseUrl(req) {
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const proto = req.get('x-forwarded-proto') || req.protocol;
+  return `${proto}://${host}`;
+}
+
 app.get('/api/items/:id/qr', async (req, res) => {
   if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
     return res.status(404).json({ error: 'Item not found' });
-  const host = req.get('x-forwarded-host') || req.get('host');
-  const proto = req.get('x-forwarded-proto') || req.protocol;
-  const scanUrl = `${proto}://${host}/scan/${req.params.id}`;
+  const scanUrl = `${requestBaseUrl(req)}/scan/${req.params.id}`;
   try {
     const png = await QRCode.toBuffer(scanUrl, { type: 'png', margin: 1, width: 280, errorCorrectionLevel: 'M' });
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(png);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/items/:id/photo-qr', async (req, res) => {
+  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Item not found' });
+  const uploadUrl = `${requestBaseUrl(req)}/photo-upload.html?id=${req.params.id}`;
+  try {
+    const png = await QRCode.toBuffer(uploadUrl, { type: 'png', margin: 1, width: 280, errorCorrectionLevel: 'M' });
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(png);
@@ -329,11 +371,12 @@ app.post('/api/items', (req, res) => {
     INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
       purchase_date,purchase_price,replacement_value,replacement_value_note,
       condition,condition_notes,location,description,quantity,update_checks_enabled,
-      warranty_end_date,warranty_note)
+      warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at)
     VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
       @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
       @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
-      @warranty_end_date,@warranty_note)
+      @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
+      CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END)
   `).run(data);
   setItemTags(result.lastInsertRowid, req.body.tags || []);
   if (data.brand) queueBrandLogoFetch(data.brand);
@@ -344,6 +387,8 @@ app.put('/api/items/:id', (req, res) => {
   if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
     return res.status(404).json({ error: 'Item not found' });
   const data = sanitizeItemInput(req.body);
+  const existing = db.prepare('SELECT replacement_value, value_updated_at FROM items WHERE id=?').get(req.params.id);
+  const valueChanged = existing && Number(existing.replacement_value) !== Number(data.replacement_value);
   db.prepare(`
     UPDATE items SET name=@name,common_name=@common_name,category=@category,brand=@brand,
       model=@model,serial_number=@serial_number,year=@year,purchase_date=@purchase_date,
@@ -352,8 +397,11 @@ app.put('/api/items/:id', (req, res) => {
       condition_notes=@condition_notes,location=@location,description=@description,
       quantity=@quantity,update_checks_enabled=@update_checks_enabled,
       warranty_end_date=@warranty_end_date,warranty_note=@warranty_note,
+      studio_status=@studio_status,studio_status_note=@studio_status_note,
+      value_updated_at=CASE WHEN @value_changed = 1 AND @replacement_value > 0
+        THEN datetime('now') ELSE value_updated_at END,
       updated_at=datetime('now') WHERE id=@id
-  `).run({ ...data, id: req.params.id });
+  `).run({ ...data, id: req.params.id, value_changed: valueChanged ? 1 : 0 });
   setItemTags(req.params.id, req.body.tags || []);
   if (data.brand) queueBrandLogoFetch(data.brand);
   res.json(enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id)));
@@ -365,6 +413,72 @@ app.delete('/api/items/:id', (req, res) => {
   removeItemUploadDirs(req.params.id);
   db.prepare('DELETE FROM items WHERE id=?').run(req.params.id);
   res.json({ ok: true });
+});
+
+app.get('/api/items/:id/maintenance', (req, res) => {
+  const item = db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  res.json(enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id)).maintenance);
+});
+
+app.post('/api/items/:id/maintenance', (req, res) => {
+  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Item not found' });
+  const entry = addMaintenanceEntry(req.params.id, req.body || {});
+  res.status(201).json(entry);
+});
+
+app.delete('/api/maintenance/:id', (req, res) => {
+  const row = db.prepare('SELECT id FROM maintenance_log WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Entry not found' });
+  deleteMaintenanceEntry(req.params.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/items/:id/completeness', (req, res) => {
+  const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  res.json(computeItemCompleteness(enrichItem(item)));
+});
+
+app.post('/api/import/csv', express.text({ type: ['text/csv', 'text/plain', 'application/csv'], limit: '5mb' }), (req, res) => {
+  try {
+    const { rows } = parseCsv(req.body || '');
+    if (!rows.length) return res.status(400).json({ error: 'No data rows found in CSV' });
+
+    const insert = db.prepare(`
+      INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
+        purchase_date,purchase_price,replacement_value,replacement_value_note,
+        condition,condition_notes,location,description,quantity,update_checks_enabled,
+        warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at)
+      VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
+        @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
+        @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
+        @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
+        CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END)
+    `);
+
+    let imported = 0;
+    const errors = [];
+    const tx = db.transaction(() => {
+      for (let i = 0; i < rows.length; i++) {
+        try {
+          const { data, tags } = mapRowToItem(rows[i], sanitizeItemInput);
+          const result = insert.run(data);
+          setItemTags(result.lastInsertRowid, tags);
+          if (data.brand) ensureBrand(data.brand);
+          imported++;
+        } catch (err) {
+          errors.push({ row: i + 2, error: err.message });
+        }
+      }
+    });
+    tx();
+    syncBrandsFromItems();
+    res.json({ ok: true, imported, skipped: errors.length, errors: errors.slice(0, 20) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/items/:id/photos', photoUpload.array('files', 20), (req, res) => {

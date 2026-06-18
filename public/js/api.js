@@ -75,5 +75,16 @@ export const api = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ items: data.items || data, replace })
-  })
+  }),
+  importCsv: (csvText) => request('/import/csv', {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/csv' },
+    body: csvText
+  }),
+  addMaintenance: (itemId, data) => request(`/items/${itemId}/maintenance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }),
+  deleteMaintenance: (id) => request(`/maintenance/${id}`, { method: 'DELETE' })
 };

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f1419">
+  <title>Add Photos — Studio Inventory</title>
+  <link rel="stylesheet" href="/css/photo-upload.css">
+</head>
+<body>
+  <main class="photo-upload-app">
+    <header class="photo-upload-header">
+      <h1>Add Photos</h1>
+      <p id="item-name" class="item-name">Loading…</p>
+    </header>
+
+    <section class="photo-upload-card" id="upload-card">
+      <p class="hint">Take or choose photos on your phone. They upload directly to your studio computer on the same Wi‑Fi.</p>
+
+      <label class="camera-btn">
+        <span class="camera-icon">📷</span>
+        <span>Take Photo</span>
+        <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
+      </label>
+
+      <label class="gallery-btn">
+        <span>Choose from Gallery</span>
+        <input type="file" id="gallery-input" accept="image/*" multiple hidden>
+      </label>
+
+      <div id="preview-list" class="preview-list"></div>
+      <button type="button" class="upload-btn" id="upload-btn" disabled>Upload Photos</button>
+      <p id="status" class="status" role="status"></p>
+    </section>
+
+    <section class="photo-upload-card hidden" id="done-card">
+      <h2>Uploaded!</h2>
+      <p id="done-message"></p>
+      <button type="button" class="upload-btn" id="add-more-btn">Add More Photos</button>
+      <a href="/" class="back-link">Open Studio Inventory</a>
+    </section>
+
+    <section class="photo-upload-card error-card hidden" id="error-card">
+      <h2>Cannot load item</h2>
+      <p id="error-message"></p>
+    </section>
+  </main>
+  <script type="module" src="/js/photo-upload.js"></script>
+</body>
+</html>

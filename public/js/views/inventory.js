@@ -2,6 +2,9 @@ import {
   formatCurrency, formatDate, escapeHtml, fileUrl, brandLogoHtml, isDriverCategory,
   buildDriverSearchUrl, buildValueEstimateUrl, openLightbox, renderWarrantyStrip
 } from '../utils.js';
+import {
+  renderCompletenessChecklist, renderCompletenessBadge, renderStudioStatusBadge, MAINTENANCE_TYPES
+} from '../lib/completeness-ui.js';
 
 export function renderInventory(items, meta, filters) {
   const f = filters || {};
@@ -77,17 +80,21 @@ export function renderInventory(items, meta, filters) {
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Name</th><th>Category</th><th>Brand / Model</th><th>Location</th><th>Condition</th><th>Qty</th><th>Replacement</th></tr>
+            <tr><th>Name</th><th>Doc</th><th>Category</th><th>Brand / Model</th><th>Location</th><th>Condition</th><th>Replacement</th></tr>
           </thead>
           <tbody>
             ${items.map(item => `
               <tr data-action="view-item" data-id="${item.id}">
-                <td><strong>${escapeHtml(item.name)}</strong>${item.common_name ? `<br><span class="text-muted-sm">${escapeHtml(item.common_name)}</span>` : ''}</td>
+                <td>
+                  <strong>${escapeHtml(item.name)}</strong>
+                  ${item.common_name ? `<br><span class="text-muted-sm">${escapeHtml(item.common_name)}</span>` : ''}
+                  ${renderStudioStatusBadge(item)}
+                </td>
+                <td>${renderCompletenessBadge(item.completeness, { compact: true })}</td>
                 <td><span class="category-pill">${escapeHtml(item.category)}</span></td>
                 <td>${escapeHtml(item.brand)}${item.model ? ' / ' + escapeHtml(item.model) : ''}</td>
                 <td>${escapeHtml(item.location)}</td>
                 <td><span class="condition-badge condition-${item.condition}">${item.condition}</span></td>
-                <td>${item.quantity}</td>
                 <td class="value-cell">${formatCurrency(item.replacement_value * item.quantity)}</td>
               </tr>
             `).join('')}
@@ -114,6 +121,7 @@ export function renderItemDetail(item) {
       <div>
         <h2 class="page-title" style="margin:0">${escapeHtml(item.name)}</h2>
         ${item.common_name ? `<p class="page-subtitle" style="margin:0.25rem 0 0">${escapeHtml(item.common_name)}</p>` : ''}
+        ${renderStudioStatusBadge(item) ? `<div style="margin-top:0.5rem">${renderStudioStatusBadge(item)}</div>` : ''}
       </div>
       <div class="btn-group">
         <button type="button" class="btn btn-secondary" data-nav="inventory">Back</button>
@@ -135,6 +143,22 @@ export function renderItemDetail(item) {
       </div>
     </div>
     ` : ''}
+
+    ${renderCompletenessChecklist(item.completeness)}
+
+    <div class="card phone-upload-card">
+      <div class="card-header">
+        <h3 class="section-title">Add Photos from Phone</h3>
+      </div>
+      <p class="text-muted-sm">On the same Wi‑Fi, scan this QR with your iPhone or Android to snap photos at the rack — they upload straight to this item.</p>
+      <div class="phone-upload-row">
+        <img class="phone-upload-qr" src="/api/items/${item.id}/photo-qr" width="160" height="160" alt="QR code for phone photo upload">
+        <div class="phone-upload-links">
+          <a href="/photo-upload.html?id=${item.id}" target="_blank" rel="noopener" class="btn btn-secondary">Open Phone Upload Page</a>
+          <p class="text-muted-sm phone-upload-url"><code>${escapeHtml(`${window.location.origin}/photo-upload.html?id=${item.id}`)}</code></p>
+        </div>
+      </div>
+    </div>
 
     <div class="card photo-drop-zone" data-photo-drop-zone data-item-id="${item.id}">
       <div class="photo-drop-overlay" aria-hidden="true">
@@ -270,6 +294,46 @@ export function renderItemDetail(item) {
       ` : '<p class="text-muted" style="margin-top:1rem">No software archived yet.</p>'}
     </div>
     ` : ''}
+
+    <div class="card maintenance-card">
+      <div class="card-header">
+        <h3 class="section-title">Maintenance &amp; Service Log</h3>
+      </div>
+      <p class="text-muted-sm" style="margin-bottom:1rem">Record tube swaps, repairs, calibration, string changes, and shop visits.</p>
+      <form id="maintenance-form" class="maintenance-form">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="maint-date">Date</label>
+            <input type="date" id="maint-date" value="${new Date().toISOString().slice(0, 10)}">
+          </div>
+          <div class="form-group">
+            <label for="maint-type">Type</label>
+            <select id="maint-type">
+              ${Object.entries(MAINTENANCE_TYPES).map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group full-width">
+            <label for="maint-note">Note</label>
+            <input type="text" id="maint-note" placeholder="e.g. Replaced EL34 power tubes, biased at 35mA">
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm" style="margin-top:0.75rem">Add Entry</button>
+      </form>
+      ${(item.maintenance || []).length ? `
+        <div class="maintenance-log" style="margin-top:1.25rem">
+          ${item.maintenance.map(m => `
+            <div class="maintenance-entry">
+              <div>
+                <strong>${formatDate(m.service_date)}</strong>
+                <span class="maintenance-type-badge">${escapeHtml(MAINTENANCE_TYPES[m.service_type] || m.service_type)}</span>
+                ${m.note ? `<div class="text-muted-sm">${escapeHtml(m.note)}</div>` : ''}
+              </div>
+              <button type="button" class="btn btn-sm btn-danger" data-action="delete-maintenance" data-id="${m.id}">Remove</button>
+            </div>
+          `).join('')}
+        </div>
+      ` : '<p class="text-muted" style="margin-top:1rem">No service history yet.</p>'}
+    </div>
 
     <div class="item-purchase-footer">
       ${renderWarrantyStrip(item)}

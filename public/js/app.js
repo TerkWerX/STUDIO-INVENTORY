@@ -315,6 +315,9 @@ function bindDashboardEvents() {
       navigate('item-detail', { id: el.dataset.id });
     });
   });
+  container.querySelectorAll('[data-nav]').forEach(btn => {
+    btn.addEventListener('click', () => navigate(btn.dataset.nav));
+  });
 }
 
 async function fetchLogoForBrand(brandName) {
@@ -450,6 +453,34 @@ function bindDetailEvents(item) {
       }
     });
   });
+
+  document.getElementById('maintenance-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api.addMaintenance(item.id, {
+        service_date: document.getElementById('maint-date').value,
+        service_type: document.getElementById('maint-type').value,
+        note: document.getElementById('maint-note').value
+      });
+      showToast('Service entry added', 'success');
+      navigate('item-detail', { id: item.id });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  container.querySelectorAll('[data-action="delete-maintenance"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await api.deleteMaintenance(btn.dataset.id);
+        showToast('Entry removed', 'success');
+        navigate('item-detail', { id: item.id });
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+
   container.querySelector('[data-action="edit-item"]')?.addEventListener('click', () => {
     state.editItemId = item.id;
     navigate('item-form');
@@ -821,6 +852,37 @@ function bindBackupEvents() {
     showToast('SQL dump exported', 'success');
   });
   document.getElementById('backup-export-csv')?.addEventListener('click', () => api.exportCsv());
+
+  document.getElementById('download-csv-template')?.addEventListener('click', () => {
+    const template = [
+      'name,brand,model,serial_number,category,location,condition,replacement_value,purchase_price,purchase_date,warranty_end_date,tags',
+      'Shure SM57,Shure,SM57,SN12345,Microphone,Main Rack,Good,99,89,2024-01-15,,vocal;dynamic',
+      'Boss DD-500,Boss,DD-500,,Pedal,Pedalboard,Excellent,399,349,,,delay'
+    ].join('\n');
+    const blob = new Blob([template], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'studio-inventory-import-template.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  document.getElementById('import-csv-file')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const status = document.getElementById('import-csv-status');
+    try {
+      const text = await file.text();
+      const result = await api.importCsv(text);
+      status.textContent = `Imported ${result.imported} item(s)${result.skipped ? `, ${result.skipped} row(s) skipped` : ''}.`;
+      showToast(`Imported ${result.imported} items from CSV`, 'success');
+      navigate('inventory');
+    } catch (err) {
+      status.textContent = `Error: ${err.message}`;
+      showToast(err.message, 'error');
+    }
+    e.target.value = '';
+  });
 
   document.getElementById('import-file')?.addEventListener('change', async (e) => {
     const file = e.target.files[0];

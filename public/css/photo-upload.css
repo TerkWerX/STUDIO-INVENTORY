@@ -1,0 +1,125 @@
+:root {
+  --bg: #0f1419;
+  --card: #1a2332;
+  --text: #e8ecf1;
+  --muted: #8b9cb3;
+  --accent: #4d8dff;
+  --success: #3ecf8e;
+  --danger: #ff6b6b;
+  --touch: 56px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.photo-upload-app {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 2rem;
+}
+
+.photo-upload-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.item-name {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+.photo-upload-card {
+  margin-top: 1.25rem;
+  background: var(--card);
+  border-radius: 14px;
+  padding: 1.25rem;
+}
+
+.hint {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 1.25rem;
+}
+
+.camera-btn, .gallery-btn, .upload-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: var(--touch);
+  border-radius: 12px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+
+.camera-btn {
+  background: var(--accent);
+  color: #fff;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.gallery-btn {
+  background: transparent;
+  color: var(--text);
+  border: 2px solid #334155;
+  margin-bottom: 1rem;
+}
+
+.upload-btn {
+  background: var(--success);
+  color: #0f1419;
+}
+
+.upload-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.camera-icon { font-size: 1.35rem; }
+
+.preview-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.preview-list img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #334155;
+}
+
+.status {
+  min-height: 1.25rem;
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+.status.error { color: var(--danger); }
+.status.ok { color: var(--success); }
+
+.back-link {
+  display: block;
+  text-align: center;
+  margin-top: 1rem;
+  color: var(--accent);
+}
+
+.hidden { display: none !important; }
+
+.error-card h2 { color: var(--danger); margin-top: 0; }

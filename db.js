@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { computeItemCompleteness } = require('./lib/completeness');
 
 const DATA_DIR = process.env.STUDIO_DATA_DIR
   ? path.resolve(process.env.STUDIO_DATA_DIR)
@@ -46,6 +47,29 @@ function runMigrations() {
   if (!itemCols.includes('warranty_note')) {
     db.exec("ALTER TABLE items ADD COLUMN warranty_note TEXT DEFAULT ''");
   }
+  if (!itemCols.includes('studio_status')) {
+    db.exec("ALTER TABLE items ADD COLUMN studio_status TEXT NOT NULL DEFAULT 'in_studio'");
+  }
+  if (!itemCols.includes('studio_status_note')) {
+    db.exec("ALTER TABLE items ADD COLUMN studio_status_note TEXT DEFAULT ''");
+  }
+  if (!itemCols.includes('value_updated_at')) {
+    db.exec('ALTER TABLE items ADD COLUMN value_updated_at TEXT DEFAULT NULL');
+    db.exec(`UPDATE items SET value_updated_at = updated_at WHERE replacement_value > 0 AND value_updated_at IS NULL`);
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS maintenance_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      service_date TEXT NOT NULL DEFAULT (date('now')),
+      service_type TEXT NOT NULL DEFAULT 'maintenance',
+      note TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_maintenance_item ON maintenance_log(item_id);
+  `);
 
   const attCols = db.prepare('PRAGMA table_info(attachments)').all().map(c => c.name);
   if (!attCols.includes('relative_path')) {
@@ -205,7 +229,14 @@ function enrichItem(item) {
     photos: attachments.filter(a => a.type === 'photo'),
     manuals: attachments.filter(a => a.type === 'manual' || a.type === 'document'),
     software: attachments.filter(a => a.type === 'software'),
-    receipts: attachments.filter(a => a.type === 'receipt')
+    receipts: attachments.filter(a => a.type === 'receipt'),
+    maintenance: getMaintenanceForItem(item.id),
+    completeness: computeItemCompleteness({
+      ...item,
+      photos: attachments.filter(a => a.type === 'photo'),
+      manuals: attachments.filter(a => a.type === 'manual' || a.type === 'document'),
+      receipts: attachments.filter(a => a.type === 'receipt')
+    })
   };
 }
 
@@ -237,6 +268,8 @@ function sanitizeItemInput(body) {
   const conditions = ['New', 'Excellent', 'Good', 'Fair', 'Poor'];
   const condition = conditions.includes(body.condition) ? body.condition : 'Good';
   const updateChecks = body.update_checks_enabled === false || body.update_checks_enabled === 0 || body.update_checks_enabled === '0' ? 0 : 1;
+  const statuses = ['in_studio', 'loaned', 'in_repair', 'storage', 'away'];
+  const studio_status = statuses.includes(body.studio_status) ? body.studio_status : 'in_studio';
 
   return {
     name: str(body.name, 300) || 'Unnamed Item',
@@ -257,8 +290,32 @@ function sanitizeItemInput(body) {
     quantity: qty(body.quantity),
     update_checks_enabled: updateChecks,
     warranty_end_date: str(body.warranty_end_date, 20),
-    warranty_note: str(body.warranty_note, 500)
+    warranty_note: str(body.warranty_note, 500),
+    studio_status,
+    studio_status_note: str(body.studio_status_note, 500)
   };
+}
+
+function getMaintenanceForItem(itemId) {
+  return db.prepare(`
+    SELECT id, item_id, service_date, service_type, note, created_at
+    FROM maintenance_log WHERE item_id = ? ORDER BY service_date DESC, id DESC
+  `).all(itemId);
+}
+
+function addMaintenanceEntry(itemId, { service_date, service_type, note }) {
+  const types = ['maintenance', 'repair', 'calibration', 'strings', 'tubes', 'cleaning', 'other'];
+  const type = types.includes(service_type) ? service_type : 'maintenance';
+  const date = String(service_date || '').trim().slice(0, 20) || new Date().toISOString().slice(0, 10);
+  const result = db.prepare(`
+    INSERT INTO maintenance_log (item_id, service_date, service_type, note)
+    VALUES (?, ?, ?, ?)
+  `).run(itemId, date, type, String(note || '').trim().slice(0, 2000));
+  return db.prepare('SELECT * FROM maintenance_log WHERE id = ?').get(result.lastInsertRowid);
+}
+
+function deleteMaintenanceEntry(id) {
+  db.prepare('DELETE FROM maintenance_log WHERE id = ?').run(id);
 }
 
 function itemUploadDir(itemId, type) {
@@ -296,5 +353,8 @@ module.exports = {
   brandSlug,
   ensureBrand,
   getBrandsWithCounts,
-  syncBrandsFromItems
+  syncBrandsFromItems,
+  getMaintenanceForItem,
+  addMaintenanceEntry,
+  deleteMaintenanceEntry
 };

@@ -7,7 +7,8 @@ export function renderItemForm(item, meta) {
     serial_number: '', year: '', purchase_date: '', purchase_price: 0,
     replacement_value: 0, replacement_value_note: '', condition: 'Good',
     condition_notes: '', location: '', description: '', quantity: 1,
-    update_checks_enabled: true, warranty_end_date: '', warranty_note: '', tags: []
+    update_checks_enabled: true, warranty_end_date: '', warranty_note: '',
+    studio_status: 'in_studio', studio_status_note: '', tags: []
   };
   const tagNames = (data.tags || []).map(t => typeof t === 'string' ? t : t.name);
   const checksOn = data.update_checks_enabled !== false && data.update_checks_enabled !== 0;
@@ -63,6 +64,20 @@ export function renderItemForm(item, meta) {
             <option value="">Select...</option>
             ${meta.locations.map(l => `<option value="${escapeHtml(l)}" ${data.location === l ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
           </select>
+        </div>
+        <div class="form-group">
+          <label for="studio_status">Studio Status</label>
+          <select id="studio_status">
+            <option value="in_studio" ${(data.studio_status || 'in_studio') === 'in_studio' ? 'selected' : ''}>In studio</option>
+            <option value="loaned" ${data.studio_status === 'loaned' ? 'selected' : ''}>Loaned out</option>
+            <option value="in_repair" ${data.studio_status === 'in_repair' ? 'selected' : ''}>In repair</option>
+            <option value="storage" ${data.studio_status === 'storage' ? 'selected' : ''}>In storage</option>
+            <option value="away" ${data.studio_status === 'away' ? 'selected' : ''}>Away (gig, other room, etc.)</option>
+          </select>
+        </div>
+        <div class="form-group full-width">
+          <label for="studio_status_note">Status Note</label>
+          <input type="text" id="studio_status_note" value="${escapeHtml(data.studio_status_note || '')}" placeholder="e.g. At Mike's studio until Friday, UPS to Sweetwater repair">
         </div>
         <div class="form-group">
           <label for="condition">Condition</label>
@@ -151,6 +166,8 @@ export function collectFormData() {
     serial_number: document.getElementById('serial_number').value,
     year: document.getElementById('year').value,
     location: document.getElementById('location').value,
+    studio_status: document.getElementById('studio_status').value,
+    studio_status_note: document.getElementById('studio_status_note').value,
     condition: document.getElementById('condition').value,
     quantity: document.getElementById('quantity').value,
     purchase_date: document.getElementById('purchase_date').value,

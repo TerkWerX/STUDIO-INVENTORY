@@ -1,0 +1,40 @@
+{
+  "name": "studio-inventory",
+  "version": "1.0.0",
+  "description": "Local inventory management for physical musical instruments and audio hardware — optimized for home studios and 4K TV displays",
+  "main": "server.js",
+  "author": "TerkWerX",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TerkWerX/STUDIO-INVENTORY.git"
+  },
+  "homepage": "https://github.com/TerkWerX/STUDIO-INVENTORY#readme",
+  "bugs": {
+    "url": "https://github.com/TerkWerX/STUDIO-INVENTORY/issues"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node seed.js",
+    "reseed": "node seed.js --force",
+    "sync-brands": "node scripts/populate-logos.js",
+    "fetch-logos": "node scripts/fetch-logos.js",
+    "fetch-logos:force": "node scripts/fetch-logos.js --force"
+  },
+  "keywords": [
+    "inventory",
+    "home-studio",
+    "music-gear",
+    "audio-hardware",
+    "insurance",
+    "sqlite",
+    "express",
+    "pwa",
+    "4k-tv"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}

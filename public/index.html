@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Studio Inventory — local inventory management for musical instruments and audio hardware">
+  <meta name="theme-color" content="#0f1419">
+  <title>Studio Inventory</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js" defer></script>
+</head>
+<body>
+  <div id="backup-banner" class="backup-banner hidden" role="alert">
+    <span>Remember to back up your inventory regularly for insurance purposes.</span>
+    <button type="button" class="btn btn-sm" id="backup-banner-export">Export Now</button>
+    <button type="button" class="btn-icon" id="backup-banner-dismiss" aria-label="Dismiss">&times;</button>
+  </div>
+
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <svg class="brand-icon" viewBox="0 0 48 48" aria-hidden="true">
+          <circle cx="24" cy="24" r="22" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M14 30c4-8 16-8 20 0" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="24" cy="18" r="4" fill="currentColor"/>
+        </svg>
+        <div>
+          <h1>Studio Inventory</h1>
+          <p class="brand-sub">Music &amp; Audio Gear</p>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" aria-label="Main navigation">
+        <button type="button" class="nav-btn active" data-view="dashboard">
+          <span class="nav-icon">&#9632;</span> Dashboard
+        </button>
+        <button type="button" class="nav-btn" data-view="inventory">
+          <span class="nav-icon">&#9776;</span> Inventory
+        </button>
+        <button type="button" class="nav-btn" data-view="brands">
+          <span class="nav-icon">&#127991;</span> Brands
+        </button>
+        <button type="button" class="nav-btn" data-view="item-form" data-mode="new">
+          <span class="nav-icon">+</span> Add Item
+        </button>
+        <button type="button" class="nav-btn" data-view="manuals">
+          <span class="nav-icon">&#128196;</span> Manuals
+        </button>
+        <button type="button" class="nav-btn" data-view="reports">
+          <span class="nav-icon">&#128202;</span> Reports
+        </button>
+        <button type="button" class="nav-btn" data-view="insurance">
+          <span class="nav-icon">&#128737;</span> Insurance
+        </button>
+        <button type="button" class="nav-btn" data-view="backup">
+          <span class="nav-icon">&#128190;</span> Backup
+        </button>
+        <button type="button" class="nav-btn" data-view="about">
+          <span class="nav-icon">?</span> Help
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button type="button" class="btn btn-ghost btn-block" id="theme-toggle" title="Toggle light/dark mode">
+          <span id="theme-icon">&#9790;</span> Theme
+        </button>
+        <p class="version-tag" id="item-count-label">Loading...</p>
+      </div>
+    </aside>
+
+    <main class="main-content" id="main-content" tabindex="-1">
+      <div id="view-container"></div>
+    </main>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal" id="modal">
+      <h2 id="modal-title"></h2>
+      <p id="modal-message"></p>
+      <div class="modal-actions" id="modal-actions"></div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <div id="lightbox-overlay" class="lightbox-overlay hidden" role="dialog" aria-modal="true" aria-label="Photo viewer">
+    <button type="button" class="lightbox-close" aria-label="Close">&times;</button>
+    <button type="button" class="lightbox-prev" aria-label="Previous">&#8249;</button>
+    <button type="button" class="lightbox-next" aria-label="Next">&#8250;</button>
+    <div class="lightbox-content">
+      <img class="lightbox-img" src="" alt="">
+      <div class="lightbox-caption"></div>
+      <div class="lightbox-counter"></div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

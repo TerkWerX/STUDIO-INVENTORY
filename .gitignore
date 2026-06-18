@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+
+data/inventory.db
+data/inventory.db-wal
+data/inventory.db-shm
+data/uploads/*
+!data/uploads/.gitkeep
+data/backups/*
+!data/backups/.gitkeep

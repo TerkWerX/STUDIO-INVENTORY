@@ -1,0 +1,139 @@
+export function formatCurrency(amount) {
+  const n = parseFloat(amount) || 0;
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+}
+
+export function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    const d = new Date(dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch {
+    return dateStr;
+  }
+}
+
+export function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str ?? '';
+  return div.innerHTML;
+}
+
+export function debounce(fn, ms = 300) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+export function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = message;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+export function showModal({ title, message, confirmText = 'Confirm', cancelText = 'Cancel', danger = false, prompt = false, promptValue = '' }) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    document.getElementById('modal-title').textContent = title;
+    const msgEl = document.getElementById('modal-message');
+    if (prompt) {
+      msgEl.innerHTML = `${escapeHtml(message)}<input type="number" id="modal-prompt-input" class="modal-prompt-input" value="${promptValue}" min="0" step="1" placeholder="Enter value">`;
+    } else {
+      msgEl.textContent = message;
+    }
+    const actions = document.getElementById('modal-actions');
+    actions.innerHTML = `
+      <button type="button" class="btn btn-secondary" id="modal-cancel">${escapeHtml(cancelText)}</button>
+      <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="modal-confirm">${escapeHtml(confirmText)}</button>
+    `;
+    overlay.classList.remove('hidden');
+    if (prompt) document.getElementById('modal-prompt-input')?.focus();
+
+    const close = (result) => {
+      overlay.classList.add('hidden');
+      resolve(result);
+    };
+
+    document.getElementById('modal-cancel').onclick = () => close(prompt ? null : false);
+    document.getElementById('modal-confirm').onclick = () => {
+      if (prompt) {
+        const v = document.getElementById('modal-prompt-input')?.value;
+        close(v);
+      } else close(true);
+    };
+    overlay.onclick = (e) => { if (e.target === overlay) close(prompt ? null : false); };
+  });
+}
+
+export const DEFAULT_TAGS = [
+  'Essential', 'Vintage', "Daughter's Gear", 'Recording', 'Live', 'Loaned Out'
+];
+
+export const DRIVER_CATEGORIES = new Set([
+  'Audio Interface', 'Mixer', 'Control Surface', 'Keyboard'
+]);
+
+export function isDriverCategory(category) {
+  return DRIVER_CATEGORIES.has(category);
+}
+
+export function fileUrl(relativePath) {
+  if (!relativePath) return '#';
+  return `/uploads/${relativePath.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/** Brand logo markup with initials fallback when image fails to load. */
+export function brandLogoHtml(brand, className = 'brand-logo', { large = false } = {}) {
+  const initials = escapeHtml((brand.name || '').slice(0, 2).toUpperCase() || '?');
+  if (!brand.logo_path) {
+    return `<div class="brand-logo-fallback${large ? ' lg' : ''}">${initials}</div>`;
+  }
+  const src = fileUrl(brand.logo_path);
+  const alt = escapeHtml(brand.name || '');
+  const fbClass = `brand-logo-fallback${large ? ' lg' : ''} hidden`;
+  return `<span class="brand-logo-wrap">
+    <img src="${src}" alt="${alt}" class="${className}" loading="lazy"
+      onerror="this.classList.add('hidden');this.nextElementSibling?.classList.remove('hidden')">
+    <span class="${fbClass}">${initials}</span>
+  </span>`;
+}
+
+export function buildDriverSearchUrl(brand, model) {
+  const q = encodeURIComponent(`${brand} ${model} driver firmware download latest`.trim());
+  return `https://www.google.com/search?q=${q}`;
+}
+
+export function buildValueEstimateUrl(brand, model, name) {
+  const term = encodeURIComponent(`${brand} ${model || name} used for sale`.trim());
+  return `https://www.google.com/search?q=site:reverb.com+OR+site:ebay.com+${term}`;
+}
+
+export function openLightbox(images, startIndex = 0) {
+  const overlay = document.getElementById('lightbox-overlay');
+  if (!overlay || !images.length) return;
+  let idx = startIndex;
+  const img = overlay.querySelector('.lightbox-img');
+  const caption = overlay.querySelector('.lightbox-caption');
+  const counter = overlay.querySelector('.lightbox-counter');
+
+  const show = (i) => {
+    idx = (i + images.length) % images.length;
+    img.src = images[idx].url;
+    img.alt = images[idx].name;
+    caption.textContent = images[idx].name;
+    counter.textContent = `${idx + 1} / ${images.length}`;
+  };
+
+  overlay.querySelector('.lightbox-prev').onclick = () => show(idx - 1);
+  overlay.querySelector('.lightbox-next').onclick = () => show(idx + 1);
+  overlay.querySelector('.lightbox-close').onclick = () => overlay.classList.add('hidden');
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.add('hidden'); };
+
+  show(startIndex);
+  overlay.classList.remove('hidden');
+}

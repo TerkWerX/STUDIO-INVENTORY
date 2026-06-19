@@ -87,6 +87,18 @@ export const api = {
     body: JSON.stringify(data)
   }),
   deleteMaintenance: (id) => request(`/maintenance/${id}`, { method: 'DELETE' }),
+  loans: () => request('/loans'),
+  checkoutItem: (itemId, data) => request(`/items/${itemId}/loans`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }),
+  returnLoan: (loanId, data) => request(`/loans/${loanId}/return`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }),
+  deleteLoan: (id) => request(`/loans/${id}`, { method: 'DELETE' }),
   studioMap: () => request('/studio/map'),
   racks: () => request('/racks'),
   createRack: (data) => request('/racks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),

@@ -87,6 +87,23 @@ function runMigrations() {
     );
     CREATE INDEX IF NOT EXISTS idx_maintenance_item ON maintenance_log(item_id);
 
+    CREATE TABLE IF NOT EXISTS loan_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      borrower_name TEXT NOT NULL,
+      borrower_contact TEXT DEFAULT '',
+      loaned_at TEXT NOT NULL DEFAULT (date('now')),
+      due_date TEXT DEFAULT NULL,
+      returned_at TEXT DEFAULT NULL,
+      note TEXT DEFAULT '',
+      condition_out TEXT DEFAULT '',
+      condition_in TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_loan_item ON loan_log(item_id);
+    CREATE INDEX IF NOT EXISTS idx_loan_active ON loan_log(item_id, returned_at);
+
     CREATE TABLE IF NOT EXISTS racks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -296,6 +313,8 @@ function enrichItem(item) {
     software: attachments.filter(a => a.type === 'software'),
     receipts: attachments.filter(a => a.type === 'receipt'),
     maintenance: getMaintenanceForItem(item.id),
+    loans: getLoansForItem(item.id),
+    activeLoan: enrichLoanRow(getActiveLoanForItem(item.id)),
     parent: getParentSummary(item.parent_item_id),
     accessories: getAccessoryItems(item.id).map(child => {
       const att = getAttachmentsForItem(child.id);
@@ -439,6 +458,134 @@ function deleteMaintenanceEntry(id) {
   db.prepare('DELETE FROM maintenance_log WHERE id = ?').run(id);
 }
 
+function buildLoanStatusNote(borrower, dueDate, note) {
+  let s = `Loaned to ${borrower}`;
+  if (dueDate) s += ` · due ${dueDate}`;
+  if (note) s += ` · ${note}`;
+  return s.slice(0, 500);
+}
+
+function getLoansForItem(itemId) {
+  return db.prepare(`
+    SELECT id, item_id, borrower_name, borrower_contact, loaned_at, due_date,
+      returned_at, note, condition_out, condition_in, created_at
+    FROM loan_log WHERE item_id = ? ORDER BY loaned_at DESC, id DESC
+  `).all(itemId);
+}
+
+function getActiveLoanForItem(itemId) {
+  return db.prepare(`
+    SELECT id, item_id, borrower_name, borrower_contact, loaned_at, due_date,
+      returned_at, note, condition_out, condition_in, created_at
+    FROM loan_log WHERE item_id = ? AND returned_at IS NULL
+    ORDER BY id DESC LIMIT 1
+  `).get(itemId) || null;
+}
+
+function isLoanOverdue(loan) {
+  if (!loan?.due_date) return false;
+  return loan.due_date < new Date().toISOString().slice(0, 10);
+}
+
+function enrichLoanRow(loan) {
+  if (!loan) return null;
+  return { ...loan, overdue: isLoanOverdue(loan) };
+}
+
+function getActiveLoans() {
+  const rows = db.prepare(`
+    SELECT l.id, l.item_id, l.borrower_name, l.borrower_contact, l.loaned_at, l.due_date,
+      l.returned_at, l.note, l.condition_out, l.condition_in, l.created_at,
+      i.name as item_name, i.brand, i.model, i.category, i.replacement_value, i.location
+    FROM loan_log l
+    JOIN items i ON i.id = l.item_id
+    WHERE l.returned_at IS NULL
+    ORDER BY
+      CASE WHEN l.due_date IS NULL OR l.due_date = '' THEN 1 ELSE 0 END,
+      l.due_date ASC,
+      l.loaned_at DESC
+  `).all();
+  return rows.map(enrichLoanRow);
+}
+
+function getRecentLoanHistory(limit = 30) {
+  const rows = db.prepare(`
+    SELECT l.id, l.item_id, l.borrower_name, l.borrower_contact, l.loaned_at, l.due_date,
+      l.returned_at, l.note, l.condition_out, l.condition_in, l.created_at,
+      i.name as item_name, i.brand, i.model, i.category
+    FROM loan_log l
+    JOIN items i ON i.id = l.item_id
+    WHERE l.returned_at IS NOT NULL
+    ORDER BY l.returned_at DESC, l.id DESC
+    LIMIT ?
+  `).all(limit);
+  return rows.map(enrichLoanRow);
+}
+
+function checkoutItem(itemId, data = {}) {
+  if (getActiveLoanForItem(itemId)) throw new Error('Item is already on loan');
+
+  const borrower_name = String(data.borrower_name || '').trim();
+  if (!borrower_name) throw new Error('Borrower name is required');
+
+  const loaned_at = String(data.loaned_at || '').trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const due_date = String(data.due_date || '').trim().slice(0, 10) || null;
+  const borrower_contact = String(data.borrower_contact || '').trim().slice(0, 200);
+  const note = String(data.note || '').trim().slice(0, 2000);
+  const condition_out = String(data.condition_out || '').trim().slice(0, 500);
+
+  const tx = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO loan_log (item_id, borrower_name, borrower_contact, loaned_at, due_date, note, condition_out)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(itemId, borrower_name, borrower_contact, loaned_at, due_date, note, condition_out);
+
+    db.prepare(`
+      UPDATE items SET studio_status = 'loaned', studio_status_note = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(buildLoanStatusNote(borrower_name, due_date, note), itemId);
+
+    return db.prepare('SELECT * FROM loan_log WHERE id = ?').get(result.lastInsertRowid);
+  });
+
+  return enrichLoanRow(tx());
+}
+
+function returnLoan(loanId, data = {}) {
+  const loan = db.prepare('SELECT * FROM loan_log WHERE id = ?').get(loanId);
+  if (!loan) throw new Error('Loan not found');
+  if (loan.returned_at) throw new Error('Item already returned');
+
+  const returned_at = String(data.returned_at || '').trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const condition_in = String(data.condition_in || '').trim().slice(0, 500);
+  const returnNote = String(data.return_note || '').trim().slice(0, 2000);
+
+  const tx = db.transaction(() => {
+    db.prepare(`
+      UPDATE loan_log
+      SET returned_at = ?, condition_in = ?,
+        note = CASE WHEN ? != '' THEN note || char(10) || ? ELSE note END
+      WHERE id = ?
+    `).run(returned_at, condition_in, returnNote, returnNote, loanId);
+
+    db.prepare(`
+      UPDATE items SET studio_status = 'in_studio', studio_status_note = '', updated_at = datetime('now')
+      WHERE id = ?
+    `).run(loan.item_id);
+
+    return db.prepare('SELECT * FROM loan_log WHERE id = ?').get(loanId);
+  });
+
+  return enrichLoanRow(tx());
+}
+
+function deleteLoanEntry(id) {
+  const loan = db.prepare('SELECT * FROM loan_log WHERE id = ?').get(id);
+  if (!loan) throw new Error('Loan entry not found');
+  if (!loan.returned_at) throw new Error('Cannot delete an active loan — mark it returned first');
+  db.prepare('DELETE FROM loan_log WHERE id = ?').run(id);
+}
+
 function itemUploadDir(itemId, type) {
   const sub = { photo: 'photos', manual: 'manuals', document: 'manuals', software: 'software', receipt: 'receipts' }[type] || 'manuals';
   const dir = path.join(UPLOADS_DIR, sub, String(itemId));
@@ -478,6 +625,14 @@ module.exports = {
   getMaintenanceForItem,
   addMaintenanceEntry,
   deleteMaintenanceEntry,
+  getLoansForItem,
+  getActiveLoanForItem,
+  getActiveLoans,
+  getRecentLoanHistory,
+  checkoutItem,
+  returnLoan,
+  deleteLoanEntry,
+  isLoanOverdue,
   getParentSummary,
   getAccessoryItems,
   getRacks,

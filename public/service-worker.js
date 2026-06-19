@@ -1,4 +1,4 @@
-const CACHE = 'studio-inventory-v15';
+const CACHE = 'studio-inventory-v16';
 const ASSETS = [
   '/',
   '/index.html',
@@ -21,6 +21,7 @@ const ASSETS = [
   '/js/views/labels.js',
   '/js/views/binder.js',
   '/js/views/studio-view.js',
+  '/js/views/loans.js',
   '/js/lib/binder-print.js',
   '/js/lib/completeness-ui.js',
   '/photo-upload.html',

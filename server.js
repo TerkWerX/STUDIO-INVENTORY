@@ -8,7 +8,9 @@ const {
   enrichItem, setItemTags, sanitizeItemInput, itemUploadDir,
   removeItemUploadDirs, DEFAULT_CATEGORIES, DEFAULT_LOCATIONS,
   ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR,
-  addMaintenanceEntry, deleteMaintenanceEntry, getRacks, getSignalChains
+  addMaintenanceEntry, deleteMaintenanceEntry,
+  getActiveLoans, getRecentLoanHistory, checkoutItem, returnLoan, deleteLoanEntry,
+  getRacks, getSignalChains
 } = require('./db');
 const { summarizeCompleteness, computeItemCompleteness } = require('./lib/completeness');
 const { parseCsv, mapRowToItem } = require('./lib/csv-import');
@@ -257,6 +259,8 @@ app.get('/api/stats', (_req, res) => {
     ORDER BY name ASC
     LIMIT 20
   `).all();
+  const activeLoans = getActiveLoans();
+  const overdueLoans = activeLoans.filter(l => l.overdue);
   res.json({
     totals,
     byCategory: db.prepare(`SELECT category, COUNT(*) as count, COALESCE(SUM(replacement_value*quantity),0) as total_value FROM items GROUP BY category ORDER BY total_value DESC`).all(),
@@ -265,7 +269,10 @@ app.get('/api/stats', (_req, res) => {
     highValue: db.prepare(`SELECT id,name,category,replacement_value,serial_number FROM items WHERE replacement_value>=500 ORDER BY replacement_value DESC LIMIT 10`).all(),
     completeness,
     warrantyExpiring,
-    awayItems
+    awayItems,
+    activeLoans,
+    overdueLoanCount: overdueLoans.length,
+    activeLoanCount: activeLoans.length
   });
 });
 
@@ -634,6 +641,50 @@ app.delete('/api/maintenance/:id', (req, res) => {
   if (!row) return res.status(404).json({ error: 'Entry not found' });
   deleteMaintenanceEntry(req.params.id);
   res.json({ ok: true });
+});
+
+app.get('/api/loans', (_req, res) => {
+  res.json({
+    active: getActiveLoans(),
+    recent: getRecentLoanHistory(40)
+  });
+});
+
+app.get('/api/items/:id/loans', (req, res) => {
+  const item = db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const enriched = enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id));
+  res.json({ active: enriched.activeLoan, history: enriched.loans });
+});
+
+app.post('/api/items/:id/loans', (req, res) => {
+  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
+    return res.status(404).json({ error: 'Item not found' });
+  try {
+    const loan = checkoutItem(req.params.id, req.body || {});
+    res.status(201).json({ loan, item: enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id)) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/loans/:id/return', (req, res) => {
+  try {
+    const loan = returnLoan(req.params.id, req.body || {});
+    const item = enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(loan.item_id));
+    res.json({ loan, item });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/loans/:id', (req, res) => {
+  try {
+    deleteLoanEntry(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.get('/api/items/:id/completeness', (req, res) => {

@@ -3,7 +3,7 @@ import { escapeHtml } from '../utils.js';
 export function renderAbout() {
   return `
     <h2 class="page-title">Help &amp; About</h2>
-    <p class="page-subtitle">Studio Inventory v1.5 — Local music gear management</p>
+    <p class="page-subtitle">Studio Inventory v1.6 — Local music gear management</p>
 
     <div class="card">
       <h3 class="section-title">Getting Started</h3>
@@ -32,6 +32,7 @@ export function renderAbout() {
         <li><strong>Depreciation &amp; insurance flags</strong> — Track depreciated value and policy-listed items.</li>
         <li><strong>Accessories</strong> — Link cases, cables, and spare parts to parent gear.</li>
         <li><strong>PDF manual search</strong> — Full-text search inside uploaded PDF manuals.</li>
+        <li><strong>Loan tracking</strong> — Check gear out to bandmates, set due dates, mark returned, full history.</li>
       </ul>
       <p style="margin-top:1rem;color:var(--text-muted)">This app tracks <strong>physical hardware only</strong> — not sample libraries or sound assets.</p>
     </div>

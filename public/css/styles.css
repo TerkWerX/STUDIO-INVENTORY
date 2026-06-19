@@ -1503,6 +1503,72 @@ tbody tr:hover { background: var(--bg-hover); }
   border-radius: 2px;
 }
 
+/* Loans & checkouts */
+.loan-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.loan-summary-card {
+  text-align: center;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.loan-summary-num {
+  display: block;
+  font-size: var(--font-xl);
+  font-weight: 700;
+}
+.loan-summary-label {
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+}
+.loan-summary-active .loan-summary-num { color: var(--accent); }
+.loan-summary-overdue {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-secondary));
+}
+.loan-summary-overdue .loan-summary-num { color: var(--danger); }
+
+.loan-row-overdue { background: color-mix(in srgb, var(--danger) 6%, transparent); }
+.loan-overdue-badge {
+  display: inline-block;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  margin-right: 0.35rem;
+}
+.loan-card-overdue { border-left: 4px solid var(--danger); }
+.loan-status-pill {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+}
+.loan-status-out {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.loan-status-overdue {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+}
+.loan-history-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.loan-history-entry:last-child { border-bottom: none; }
+
 /* Print styles */
 @media print {
   .sidebar, .backup-banner, .update-banner, .toolbar, .btn, .modal-overlay, .toast-container { display: none !important; }
@@ -1514,6 +1580,7 @@ tbody tr:hover { background: var(--bg-hover); }
 /* Responsive — tablet/smaller screens */
 @media (max-width: 900px) {
   .value-trio { grid-template-columns: 1fr; }
+  .loan-summary-grid { grid-template-columns: 1fr; }
   .signal-flow { flex-direction: column; align-items: stretch; }
   .signal-arrow { transform: rotate(90deg); align-self: center; }
   .app-shell { flex-direction: column; }

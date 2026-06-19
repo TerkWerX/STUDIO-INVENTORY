@@ -13,6 +13,7 @@ import { renderAbout, renderBackup } from './views/about.js';
 import { renderLabelsPage, bindLabelsPageEvents, printSingleItemLabel } from './views/labels.js';
 import { renderBinderPage, getBinderOptionsFromDom, getSelectedBinderItemIds } from './views/binder.js';
 import { renderStudioView, rackItemsPayload, chainItemsPayload } from './views/studio-view.js';
+import { renderLoans } from './views/loans.js';
 import { printBinderDocument, printBinderItems, openManualForPrint } from './lib/binder-print.js';
 import { getDymoStatus } from './lib/dymo-labels.js';
 import { loadLabelSettings } from './lib/label-settings.js';
@@ -233,6 +234,13 @@ async function navigate(view, params = {}) {
         container.innerHTML = renderBrandItems(state.selectedBrand, brandInfo, state.items);
         bindBrandItemsEvents();
         break;
+
+      case 'loans': {
+        const loanData = await api.loans();
+        container.innerHTML = renderLoans(loanData);
+        bindLoansEvents();
+        break;
+      }
 
       case 'inventory':
         state.items = await api.items({
@@ -506,6 +514,59 @@ function bindDetailEvents(item) {
       try {
         openManualForPrint(btn.dataset.path, btn.dataset.name);
         showToast('Manual opened — click Print Manual when ready', 'info');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+
+  document.getElementById('loan-checkout-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api.checkoutItem(item.id, {
+        borrower_name: document.getElementById('loan-borrower').value,
+        borrower_contact: document.getElementById('loan-contact').value,
+        loaned_at: document.getElementById('loan-date').value,
+        due_date: document.getElementById('loan-due').value,
+        note: document.getElementById('loan-note').value,
+        condition_out: document.getElementById('loan-condition-out').value
+      });
+      showToast('Item checked out', 'success');
+      navigate('item-detail', { id: item.id });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('loan-return-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const loanId = e.target.dataset.loanId;
+    try {
+      await api.returnLoan(loanId, {
+        returned_at: document.getElementById('return-date').value,
+        condition_in: document.getElementById('return-condition').value,
+        return_note: document.getElementById('return-note').value
+      });
+      showToast('Item marked returned', 'success');
+      navigate('item-detail', { id: item.id });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  container.querySelectorAll('[data-action="delete-loan"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ok = await showModal({
+        title: 'Remove loan record?',
+        message: 'Delete this history entry from the loan log?',
+        confirmText: 'Remove',
+        danger: true
+      });
+      if (!ok) return;
+      try {
+        await api.deleteLoan(btn.dataset.id);
+        showToast('Loan record removed', 'success');
+        navigate('item-detail', { id: item.id });
       } catch (err) {
         showToast(err.message, 'error');
       }
@@ -886,6 +947,57 @@ function bindBinderEvents() {
         showToast(err.message, 'error');
       }
     });
+  });
+}
+
+function bindLoansEvents() {
+  container.querySelectorAll('[data-action="view-item"]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.selectedItemId = el.dataset.id;
+      navigate('item-detail', { id: el.dataset.id });
+    });
+  });
+
+  container.querySelectorAll('[data-action="return-loan"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ok = await showModal({
+        title: 'Mark returned?',
+        message: 'Record this item as returned to the studio today?',
+        confirmText: 'Returned',
+        cancelText: 'Cancel'
+      });
+      if (!ok) return;
+      try {
+        await api.returnLoan(btn.dataset.id, {});
+        showToast('Item marked returned', 'success');
+        navigate('loans');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+
+  container.querySelectorAll('[data-action="delete-loan"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ok = await showModal({
+        title: 'Remove loan record?',
+        message: 'Delete this returned loan from history?',
+        confirmText: 'Remove',
+        danger: true
+      });
+      if (!ok) return;
+      try {
+        await api.deleteLoan(btn.dataset.id);
+        showToast('Record removed', 'success');
+        navigate('loans');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+
+  container.querySelectorAll('[data-nav]').forEach(el => {
+    el.addEventListener('click', () => navigate(el.dataset.nav));
   });
 }
 

@@ -5,6 +5,7 @@ import {
 import {
   renderCompletenessChecklist, renderCompletenessBadge, renderStudioStatusBadge, MAINTENANCE_TYPES
 } from '../lib/completeness-ui.js';
+import { renderItemLoanSection } from './loans.js';
 
 export function renderInventory(items, meta, filters) {
   const f = filters || {};
@@ -354,6 +355,8 @@ export function renderItemDetail(item) {
       ` : '<p class="text-muted" style="margin-top:1rem">No software archived yet.</p>'}
     </div>
     ` : ''}
+
+    ${renderItemLoanSection(item)}
 
     <div class="card maintenance-card">
       <div class="card-header">

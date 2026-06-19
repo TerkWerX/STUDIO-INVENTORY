@@ -12,7 +12,10 @@ function backupAgeLabel() {
 }
 
 export function renderDashboard(stats, brands = []) {
-  const { totals, byCategory, byLocation, recent, highValue, completeness, warrantyExpiring, awayItems } = stats;
+  const {
+    totals, byCategory, byLocation, recent, highValue, completeness,
+    warrantyExpiring, awayItems, activeLoans, overdueLoanCount, activeLoanCount
+  } = stats;
   const backup = backupAgeLabel();
   const gaps = completeness?.gaps || {};
 
@@ -39,7 +42,35 @@ export function renderDashboard(stats, brands = []) {
         <div class="reminder-label">Away from studio</div>
         <div class="reminder-value">${awayItems?.length || 0} item${awayItems?.length !== 1 ? 's' : ''}</div>
       </div>
+      <div class="reminder-card ${overdueLoanCount ? 'reminder-warn' : activeLoanCount ? 'reminder-info' : ''}">
+        <div class="reminder-label">On loan</div>
+        <div class="reminder-value">${activeLoanCount || 0} out${overdueLoanCount ? ` · ${overdueLoanCount} overdue` : ''}</div>
+        <button type="button" class="btn btn-sm btn-secondary" data-nav="loans">View Loans</button>
+      </div>
     </div>
+
+    ${activeLoans?.length ? `
+    <div class="card">
+      <div class="card-header">
+        <h3 class="section-title">Checked Out</h3>
+        <button type="button" class="btn btn-ghost btn-sm" data-nav="loans">All Loans</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Item</th><th>Borrower</th><th>Due</th></tr></thead>
+          <tbody>
+            ${activeLoans.slice(0, 8).map(loan => `
+              <tr data-action="view-item" data-id="${loan.item_id}" class="${loan.overdue ? 'loan-row-overdue' : ''}" style="cursor:pointer">
+                <td><strong>${loan.item_name}</strong></td>
+                <td>${loan.borrower_name}</td>
+                <td>${loan.overdue ? '<span class="loan-overdue-badge">Overdue</span> ' : ''}${loan.due_date ? formatDate(loan.due_date) : '—'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    ` : ''}
 
     ${completeness?.totalItems ? `
     <div class="card documentation-card">

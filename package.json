@@ -1,6 +1,6 @@
 {
   "name": "studio-inventory",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Local inventory management for physical musical instruments and audio hardware — optimized for home studios and 4K TV displays",
   "main": "server.js",
   "author": "TerkWerX",
@@ -19,7 +19,7 @@
     "sync-brands": "node scripts/populate-logos.js",
     "fetch-logos": "node scripts/fetch-logos.js",
     "fetch-logos:force": "node scripts/fetch-logos.js --force",
-    "test": "node scripts/smoke-test.js",
+    "test": "node scripts/smoke-test.js && node scripts/api-smoke-test.js",
     "screenshots": "node scripts/capture-screenshots.js"
   },
   "keywords": [

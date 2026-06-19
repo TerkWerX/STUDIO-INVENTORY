@@ -70,6 +70,22 @@ async function main() {
     if (!Array.isArray(items) || items.length === 0) throw new Error('Items API returned empty');
     console.log(`Items API OK: ${items.length} items`);
 
+    const itemId = items[0].id;
+    const checkout = await fetch(`http://127.0.0.1:${PORT}/api/items/${itemId}/loans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ borrower_name: 'Smoke Test', due_date: '2099-01-01' })
+    }).then(r => r.json());
+    if (!checkout.loan?.id) throw new Error(`Loan checkout failed: ${checkout.error || 'unknown'}`);
+
+    const returned = await fetch(`http://127.0.0.1:${PORT}/api/loans/${checkout.loan.id}/return`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    }).then(r => r.json());
+    if (!returned.loan?.returned_at) throw new Error(`Loan return failed: ${returned.error || 'unknown'}`);
+    console.log('Loans API OK: checkout + return');
+
     console.log('Smoke test passed.');
   } finally {
     server.kill('SIGTERM');

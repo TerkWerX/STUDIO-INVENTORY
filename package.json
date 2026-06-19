@@ -1,6 +1,6 @@
 {
   "name": "studio-inventory",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Local inventory management for physical musical instruments and audio hardware — optimized for home studios and 4K TV displays",
   "main": "server.js",
   "author": "TerkWerX",
@@ -19,7 +19,10 @@
     "sync-brands": "node scripts/populate-logos.js",
     "fetch-logos": "node scripts/fetch-logos.js",
     "fetch-logos:force": "node scripts/fetch-logos.js --force",
-    "test": "node scripts/smoke-test.js && node scripts/api-smoke-test.js",
+    "test": "node scripts/smoke-test.js && node scripts/api-smoke-test.js && node scripts/browser-smoke-test.js",
+    "test:api": "node scripts/smoke-test.js && node scripts/api-smoke-test.js",
+    "test:browser": "node scripts/browser-smoke-test.js",
+    "postinstall": "node scripts/ensure-playwright.js",
     "screenshots": "node scripts/capture-screenshots.js"
   },
   "keywords": [
@@ -34,6 +37,9 @@
     "4k-tv"
   ],
   "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.49.1"
+  },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
     "express": "^4.21.2",

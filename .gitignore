@@ -14,3 +14,7 @@ data/uploads/*
 data/backups/*
 !data/backups/.gitkeep
 data/.smoke-test/
+data/.api-smoke-test/
+data/.browser-smoke-test/
+data/.loan-test/
+data/studio-settings.json

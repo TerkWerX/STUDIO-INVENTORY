@@ -141,6 +141,27 @@ function runMigrations() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent_item_id);
+
+    CREATE TABLE IF NOT EXISTS floorplans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      location TEXT NOT NULL UNIQUE,
+      image_path TEXT DEFAULT '',
+      width INTEGER DEFAULT 0,
+      height INTEGER DEFAULT 0,
+      notes TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS floorplan_items (
+      floorplan_id INTEGER NOT NULL,
+      item_id INTEGER NOT NULL,
+      x_pct REAL NOT NULL DEFAULT 50,
+      y_pct REAL NOT NULL DEFAULT 50,
+      PRIMARY KEY (floorplan_id, item_id),
+      FOREIGN KEY (floorplan_id) REFERENCES floorplans(id) ON DELETE CASCADE,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
   `);
 
   db.exec(`
@@ -422,6 +443,86 @@ function getRacks() {
   }));
 }
 
+function getFloorplans() {
+  const plans = db.prepare('SELECT * FROM floorplans ORDER BY location ASC').all();
+  return plans.map(fp => ({
+    ...fp,
+    items: db.prepare(`
+      SELECT fi.item_id, fi.x_pct, fi.y_pct,
+        i.name, i.category, i.brand, i.model, i.studio_status, i.replacement_value
+      FROM floorplan_items fi
+      JOIN items i ON i.id = fi.item_id
+      WHERE fi.floorplan_id = ?
+      ORDER BY i.name ASC
+    `).all(fp.id).map(row => ({
+      id: row.item_id,
+      x_pct: row.x_pct,
+      y_pct: row.y_pct,
+      name: row.name,
+      category: row.category,
+      brand: row.brand,
+      model: row.model,
+      studio_status: row.studio_status,
+      replacement_value: row.replacement_value
+    }))
+  }));
+}
+
+function getFloorplan(id) {
+  const fp = db.prepare('SELECT * FROM floorplans WHERE id = ?').get(id);
+  if (!fp) return null;
+  return getFloorplans().find(p => p.id === fp.id) || null;
+}
+
+function createFloorplan({ location, notes }) {
+  const loc = String(location || '').trim();
+  if (!loc) throw new Error('Location is required');
+  const existing = db.prepare('SELECT id FROM floorplans WHERE location = ?').get(loc);
+  if (existing) throw new Error('A floorplan already exists for this location');
+  const result = db.prepare(`
+    INSERT INTO floorplans (location, notes) VALUES (?, ?)
+  `).run(loc, String(notes || '').trim().slice(0, 2000));
+  return getFloorplan(result.lastInsertRowid);
+}
+
+function updateFloorplanImage(id, imagePath, width = 0, height = 0) {
+  db.prepare(`
+    UPDATE floorplans SET image_path = ?, width = ?, height = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(imagePath, width, height, id);
+  return getFloorplan(id);
+}
+
+function setFloorplanItems(floorplanId, items) {
+  const fp = db.prepare('SELECT id, location FROM floorplans WHERE id = ?').get(floorplanId);
+  if (!fp) throw new Error('Floorplan not found');
+
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM floorplan_items WHERE floorplan_id = ?').run(floorplanId);
+    const insert = db.prepare(`
+      INSERT INTO floorplan_items (floorplan_id, item_id, x_pct, y_pct) VALUES (?, ?, ?, ?)
+    `);
+    for (const row of items || []) {
+      const itemId = parseInt(row.item_id, 10);
+      if (!itemId) continue;
+      const item = db.prepare('SELECT id, location FROM items WHERE id = ?').get(itemId);
+      if (!item || item.location !== fp.location) continue;
+      const x = Math.min(100, Math.max(0, parseFloat(row.x_pct) || 50));
+      const y = Math.min(100, Math.max(0, parseFloat(row.y_pct) || 50));
+      insert.run(floorplanId, itemId, x, y);
+    }
+  });
+  tx();
+  return getFloorplan(floorplanId);
+}
+
+function deleteFloorplan(id) {
+  const fp = db.prepare('SELECT * FROM floorplans WHERE id = ?').get(id);
+  if (!fp) throw new Error('Floorplan not found');
+  db.prepare('DELETE FROM floorplans WHERE id = ?').run(id);
+  return fp;
+}
+
 function getSignalChains() {
   const chains = db.prepare('SELECT * FROM signal_chains ORDER BY sort_order, name').all();
   return chains.map(chain => ({
@@ -636,5 +737,11 @@ module.exports = {
   getParentSummary,
   getAccessoryItems,
   getRacks,
-  getSignalChains
+  getSignalChains,
+  getFloorplans,
+  getFloorplan,
+  createFloorplan,
+  updateFloorplanImage,
+  setFloorplanItems,
+  deleteFloorplan
 };

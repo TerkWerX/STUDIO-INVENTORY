@@ -167,6 +167,27 @@ async function main() {
     assert(enriched.loans.some(l => l.borrower_name === 'Mike'), 'loan history on item missing');
     console.log('✓ enrichItem loans');
 
+    const lookup = await api(base, '/lookup?code=SM57-88421');
+    assert(lookup.item?.name, 'serial lookup failed');
+    console.log('✓ barcode/serial lookup');
+
+    const rackItems = await api(base, '/items?location=Main+Rack');
+    assert(rackItems.length > 0, 'no Main Rack items in seed');
+    const fp = await api(base, '/floorplans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location: 'Main Rack' })
+    });
+    assert(fp.id, 'floorplan create failed');
+    await api(base, `/floorplans/${fp.id}/items`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [{ item_id: rackItems[0].id, x_pct: 40, y_pct: 55 }] })
+    });
+    const fps = await api(base, '/floorplans');
+    assert(fps.some(p => p.items?.length >= 1), 'floorplan items not saved');
+    console.log('✓ floorplans');
+
     console.log('\nExtended API smoke test passed.');
   } finally {
     server.kill('SIGTERM');

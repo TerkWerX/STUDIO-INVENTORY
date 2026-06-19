@@ -1,9 +1,11 @@
 import { escapeHtml, formatCurrency } from '../utils.js';
 import { STUDIO_STATUS_LABELS } from '../lib/completeness-ui.js';
+import { renderFloorplanTab } from './floorplan-tab.js';
 
-export function renderStudioView({ map, racks, chains, items }, tab = 'rooms') {
+export function renderStudioView({ map, racks, chains, items, floorplans, locations }, tab = 'rooms', floorplanId = null) {
   const tabs = [
     { id: 'rooms', label: 'Rooms & Zones' },
+    { id: 'floorplans', label: 'Floorplans' },
     { id: 'racks', label: 'Racks' },
     { id: 'chains', label: 'Signal Chains' }
   ];
@@ -20,6 +22,7 @@ export function renderStudioView({ map, racks, chains, items }, tab = 'rooms') {
 
     <div id="studio-tab-panel">
       ${tab === 'rooms' ? renderRoomsTab(map) : ''}
+      ${tab === 'floorplans' ? renderFloorplanTab(floorplans || [], locations || [], items, floorplanId) : ''}
       ${tab === 'racks' ? renderRacksTab(racks, items) : ''}
       ${tab === 'chains' ? renderChainsTab(chains, items) : ''}
     </div>

@@ -110,7 +110,16 @@ async function main() {
     await navTo(page, 'studio-view', '[data-studio-tab="racks"]');
     await page.click('[data-studio-tab="racks"]');
     await page.waitForSelector('#new-rack-form', { timeout: 10000 });
-    console.log('✓ studio view');
+    await navTo(page, 'studio-view', '[data-studio-tab="floorplans"]');
+    await page.click('[data-studio-tab="floorplans"]');
+    await page.waitForSelector('#floorplan-select', { timeout: 10000 });
+    console.log('✓ studio view floorplans tab');
+
+    await navTo(page, 'scan', '#scan-wedge-input');
+    await page.fill('#scan-wedge-input', 'SM57-88421');
+    await page.click('#scan-wedge-go');
+    await page.waitForSelector('.scan-result-found', { timeout: 15000 });
+    console.log('✓ scan lookup');
 
     await navTo(page, 'manuals', '#manual-fts-search');
     assert(await page.locator('#manual-search').count() === 1, 'manual list search missing');

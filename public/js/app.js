@@ -13,6 +13,8 @@ import { renderAbout, renderBackup } from './views/about.js';
 import { renderLabelsPage, bindLabelsPageEvents, printSingleItemLabel } from './views/labels.js';
 import { renderBinderPage, getBinderOptionsFromDom, getSelectedBinderItemIds } from './views/binder.js';
 import { renderStudioView, rackItemsPayload, chainItemsPayload } from './views/studio-view.js';
+import { collectFloorplanPins } from './views/floorplan-tab.js';
+import { renderScanLookup, renderScanResult, startCameraScan } from './views/scan-lookup.js';
 import { renderLoans } from './views/loans.js';
 import { printBinderDocument, printBinderItems, openManualForPrint } from './lib/binder-print.js';
 import { getDymoStatus } from './lib/dymo-labels.js';
@@ -34,10 +36,12 @@ const state = {
   selectedBrand: null,
   labelPreselectId: null,
   parentItemId: null,
-  studioTab: 'rooms'
+  studioTab: 'rooms',
+  floorplanId: null
 };
 
 const container = document.getElementById('view-container');
+let stopCameraScan = null;
 
 async function init() {
   try {
@@ -188,6 +192,10 @@ function setActiveNav(view) {
 }
 
 async function navigate(view, params = {}) {
+  if (state.view === 'scan' && view !== 'scan') {
+    stopCameraScan?.();
+    stopCameraScan = null;
+  }
   if (view !== 'item-detail') cleanupPhotoZoneListeners();
   state.view = view;
   setActiveNav(view);
@@ -203,17 +211,28 @@ async function navigate(view, params = {}) {
         bindBrandFilterEvents();
         break;
 
-      case 'studio-view':
-        const [map, racks, chains, allItems] = await Promise.all([
+      case 'scan':
+        container.innerHTML = renderScanLookup();
+        bindScanLookupEvents();
+        break;
+
+      case 'studio-view': {
+        state.meta = state.meta || await api.meta();
+        const [map, racks, chains, allItems, floorplans] = await Promise.all([
           api.studioMap(),
           api.racks(),
           api.signalChains(),
-          api.items({ sort: 'name', include_accessories: '1' })
+          api.items({ sort: 'name', include_accessories: '1' }),
+          api.floorplans()
         ]);
         state.items = allItems;
-        container.innerHTML = renderStudioView({ map, racks, chains, items: allItems }, state.studioTab);
-        bindStudioViewEvents({ map, racks, chains, items: allItems });
+        container.innerHTML = renderStudioView({
+          map, racks, chains, items: allItems, floorplans,
+          locations: state.meta.locations
+        }, state.studioTab, state.floorplanId);
+        bindStudioViewEvents({ map, racks, chains, items: allItems, floorplans });
         break;
+      }
 
       case 'brands':
         state.brands = await api.brands();
@@ -1121,6 +1140,191 @@ function bindStudioViewEvents() {
       await api.setSignalChainItems(chainId, items);
       navigate('studio-view');
     });
+  });
+
+  bindFloorplanEvents();
+}
+
+function bindScanLookupEvents() {
+  const resultsEl = document.getElementById('scan-results');
+  const wedgeInput = document.getElementById('scan-wedge-input');
+
+  const showResult = (result) => {
+    resultsEl.classList.remove('hidden');
+    resultsEl.innerHTML = renderScanResult(result);
+    resultsEl.querySelector('[data-action="view-item"]')?.addEventListener('click', (e) => {
+      state.selectedItemId = e.currentTarget.dataset.id;
+      navigate('item-detail', { id: e.currentTarget.dataset.id });
+    });
+    resultsEl.querySelectorAll('[data-action="scan-pick"]').forEach(btn => {
+      btn.addEventListener('click', () => runLookup(`SI:${btn.dataset.id}`));
+    });
+    document.getElementById('scan-another')?.addEventListener('click', () => {
+      resultsEl.classList.add('hidden');
+      resultsEl.innerHTML = '';
+      wedgeInput?.focus();
+    });
+  };
+
+  const runLookup = async (code) => {
+    const c = String(code || '').trim();
+    if (!c) return showToast('Enter or scan a code', 'error');
+    try {
+      showResult(await api.lookup(c));
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  wedgeInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runLookup(wedgeInput.value); wedgeInput.select(); }
+  });
+  document.getElementById('scan-wedge-go')?.addEventListener('click', () => runLookup(wedgeInput?.value));
+
+  let cameraOn = false;
+  document.getElementById('scan-camera-toggle')?.addEventListener('click', async () => {
+    const btn = document.getElementById('scan-camera-toggle');
+    if (cameraOn) {
+      stopCameraScan?.();
+      stopCameraScan = null;
+      cameraOn = false;
+      btn.textContent = 'Start Camera';
+      return;
+    }
+    btn.textContent = 'Stop Camera';
+    cameraOn = true;
+    stopCameraScan = await startCameraScan(
+      (code) => { cameraOn = false; btn.textContent = 'Start Camera'; runLookup(code); },
+      (msg) => { showToast(msg, 'error'); cameraOn = false; btn.textContent = 'Start Camera'; }
+    );
+  });
+
+  wedgeInput?.focus();
+}
+
+function bindFloorplanEvents() {
+  const saveFloorplan = debounce(async (id) => {
+    try {
+      await api.setFloorplanItems(id, collectFloorplanPins(id));
+      const status = document.getElementById('floorplan-save-status');
+      if (status) status.textContent = 'Saved';
+    } catch (err) { showToast(err.message, 'error'); }
+  }, 450);
+
+  container.querySelectorAll('.floorplan-pin').forEach(pin => {
+    const canvas = pin.closest('#floorplan-canvas');
+    const fpId = pin.closest('.floorplan-editor')?.dataset.floorplanId;
+    if (!canvas || !fpId) return;
+
+    pin.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      pin.setPointerCapture(e.pointerId);
+      const onMove = (ev) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = ((ev.clientX - rect.left) / rect.width) * 100;
+        const y = ((ev.clientY - rect.top) / rect.height) * 100;
+        pin.style.left = `${Math.min(97, Math.max(3, x))}%`;
+        pin.style.top = `${Math.min(97, Math.max(3, y))}%`;
+        const status = document.getElementById('floorplan-save-status');
+        if (status) status.textContent = 'Saving…';
+      };
+      const onUp = () => {
+        pin.removeEventListener('pointermove', onMove);
+        pin.removeEventListener('pointerup', onUp);
+        saveFloorplan(fpId);
+      };
+      pin.addEventListener('pointermove', onMove);
+      pin.addEventListener('pointerup', onUp);
+    });
+
+    pin.addEventListener('click', (e) => {
+      if (e.defaultPrevented) return;
+      state.selectedItemId = pin.dataset.itemId;
+      navigate('item-detail', { id: pin.dataset.itemId });
+    });
+  });
+
+  document.getElementById('floorplan-select')?.addEventListener('change', async (e) => {
+    const val = e.target.value;
+    if (!val) return;
+    if (val.startsWith('loc:')) {
+      try {
+        const fp = await api.createFloorplan({ location: decodeURIComponent(val.slice(4)) });
+        state.floorplanId = fp.id;
+        state.studioTab = 'floorplans';
+        navigate('studio-view');
+      } catch (err) { showToast(err.message, 'error'); }
+      return;
+    }
+    state.floorplanId = Number(val);
+    state.studioTab = 'floorplans';
+    navigate('studio-view');
+  });
+
+  document.getElementById('floorplan-create')?.addEventListener('click', async () => {
+    const select = document.getElementById('floorplan-select');
+    const val = select?.value || '';
+    let location = '';
+    if (val.startsWith('loc:')) location = decodeURIComponent(val.slice(4));
+    else {
+      const text = select?.selectedOptions[0]?.textContent?.replace(' (new)', '').trim();
+      if (text && text !== '— Select location —') location = text;
+    }
+    if (!location) {
+      showToast('Select a location from the dropdown first', 'error');
+      return;
+    }
+    try {
+      const fp = await api.createFloorplan({ location });
+      state.floorplanId = fp.id;
+      state.studioTab = 'floorplans';
+      showToast('Floorplan created — upload a room photo', 'success');
+      navigate('studio-view');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+
+  document.getElementById('floorplan-image-input')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    const fpId = container.querySelector('.floorplan-editor')?.dataset.floorplanId;
+    if (!file || !fpId) return;
+    try {
+      await api.uploadFloorplanImage(fpId, file);
+      showToast('Room photo uploaded', 'success');
+      state.studioTab = 'floorplans';
+      navigate('studio-view');
+    } catch (err) { showToast(err.message, 'error'); }
+    e.target.value = '';
+  });
+
+  container.querySelectorAll('[data-action="floorplan-add"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const fpId = container.querySelector('.floorplan-editor')?.dataset.floorplanId;
+      const canvas = document.getElementById('floorplan-canvas');
+      if (!fpId || !canvas) return showToast('Upload a room photo first', 'error');
+      const items = collectFloorplanPins(fpId);
+      items.push({ item_id: Number(btn.dataset.id), x_pct: 50, y_pct: 50 });
+      await api.setFloorplanItems(fpId, items);
+      navigate('studio-view');
+    });
+  });
+
+  container.querySelectorAll('[data-action="floorplan-remove"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const fpId = container.querySelector('.floorplan-editor')?.dataset.floorplanId;
+      if (!fpId) return;
+      const items = collectFloorplanPins(fpId).filter(i => i.item_id !== Number(btn.dataset.id));
+      await api.setFloorplanItems(fpId, items);
+      navigate('studio-view');
+    });
+  });
+
+  container.querySelector('[data-action="delete-floorplan"]')?.addEventListener('click', async () => {
+    const id = container.querySelector('[data-action="delete-floorplan"]')?.dataset.id;
+    if (!id || !await showModal({ title: 'Delete floorplan?', message: 'Remove this room layout (gear stays in inventory).', confirmText: 'Delete', danger: true })) return;
+    await api.deleteFloorplan(id);
+    state.floorplanId = null;
+    showToast('Floorplan deleted', 'success');
+    navigate('studio-view');
   });
 }
 

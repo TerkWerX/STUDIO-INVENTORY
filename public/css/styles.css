@@ -1569,6 +1569,140 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 .loan-history-entry:last-child { border-bottom: none; }
 
+/* Scan & lookup */
+.scan-lookup-card { margin-bottom: 1.25rem; }
+.scan-wedge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.scan-wedge-input {
+  flex: 1;
+  min-width: 220px;
+  font-size: var(--font-lg);
+  padding: 0.75rem 1rem;
+}
+.scan-camera-wrap {
+  margin-top: 1rem;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+  max-width: 640px;
+}
+.scan-camera-video {
+  width: 100%;
+  display: block;
+}
+.scan-results { margin-top: 1rem; }
+.scan-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.scan-match-badge {
+  font-size: var(--font-sm);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.scan-candidate-list { list-style: none; margin: 0; padding: 0; }
+.scan-candidate-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.scan-candidate-btn:hover { border-color: var(--accent); }
+
+/* Floorplans */
+.floorplan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+  margin-bottom: 1.25rem;
+}
+.floorplan-canvas {
+  position: relative;
+  margin: 1rem 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  touch-action: none;
+}
+.floorplan-bg {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+}
+.floorplan-pin {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  background: none;
+  border: none;
+  cursor: grab;
+  padding: 0;
+  z-index: 2;
+  max-width: 140px;
+}
+.floorplan-pin:active { cursor: grabbing; }
+.floorplan-pin-dot {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 0 auto;
+  background: var(--accent);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+}
+.floorplan-pin-label {
+  display: block;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  margin-top: 0.2rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.floorplan-palette { margin-top: 1rem; }
+.floorplan-palette-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.floorplan-legend {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+}
+.floorplan-no-image {
+  padding: 2rem;
+  text-align: center;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius);
+  margin: 1rem 0;
+}
+
 /* Print styles */
 @media print {
   .sidebar, .backup-banner, .update-banner, .toolbar, .btn, .modal-overlay, .toast-container { display: none !important; }

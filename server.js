@@ -10,8 +10,10 @@ const {
   ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR,
   addMaintenanceEntry, deleteMaintenanceEntry,
   getActiveLoans, getRecentLoanHistory, checkoutItem, returnLoan, deleteLoanEntry,
-  getRacks, getSignalChains
+  getRacks, getSignalChains,
+  getFloorplans, getFloorplan, createFloorplan, updateFloorplanImage, setFloorplanItems, deleteFloorplan
 } = require('./db');
+const { parseLookupCode } = require('./lib/lookup-code');
 const { summarizeCompleteness, computeItemCompleteness } = require('./lib/completeness');
 const { parseCsv, mapRowToItem } = require('./lib/csv-import');
 const { readSettings, writeSettings, regenerateGuestToken, isValidGuestToken } = require('./lib/studio-settings');
@@ -22,8 +24,10 @@ const QRCode = require('qrcode');
 
 const PORT = process.env.PORT || 3847;
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const FLOORPLANS_DIR = path.join(UPLOADS_DIR, 'floorplans');
 
 initSchema();
+if (!fs.existsSync(FLOORPLANS_DIR)) fs.mkdirSync(FLOORPLANS_DIR, { recursive: true });
 syncBrandsFromItems();
 
 // Fetch logos for all brands in inventory that lack a quality logo (sample set, etc.)
@@ -94,6 +98,20 @@ const receiptUpload = createUploader('receipt', {
 });
 
 const softwareUpload = createUploader('software', { maxSize: MAX_FILE_SIZE });
+
+const floorplanUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, FLOORPLANS_DIR),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      cb(null, `fp-${req.params.id}-${Date.now()}${ext}`);
+    }
+  }),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype.startsWith('image/'));
+  }
+});
 
 const logoUpload = multer({
   storage: multer.diskStorage({
@@ -336,6 +354,40 @@ app.get('/api/guest/:token/stats', guestMiddleware, (_req, res) => {
   res.json({ totals, readOnly: true });
 });
 
+function lookupItemByCode(code) {
+  const parsed = parseLookupCode(code);
+  if (!parsed) return { error: 'empty' };
+
+  if (parsed.type === 'id') {
+    const item = db.prepare('SELECT * FROM items WHERE id=?').get(parsed.value);
+    if (item) return { match: 'id', item: enrichItem(item) };
+  }
+
+  let item = db.prepare('SELECT * FROM items WHERE serial_number = ? COLLATE NOCASE').get(parsed.value);
+  if (!item) {
+    const safe = String(parsed.value).replace(/[%_]/g, '');
+    const rows = db.prepare(`
+      SELECT id, name, brand, model, serial_number, location, category
+      FROM items WHERE serial_number LIKE ? COLLATE NOCASE
+      ORDER BY name LIMIT 8
+    `).all(`%${safe}%`);
+    if (rows.length === 1) {
+      item = db.prepare('SELECT * FROM items WHERE id=?').get(rows[0].id);
+    } else if (rows.length > 1) {
+      return { match: 'multiple', candidates: rows };
+    }
+  }
+  if (item) return { match: 'serial', item: enrichItem(item) };
+  return { error: 'not_found' };
+}
+
+app.get('/api/lookup', (req, res) => {
+  const result = lookupItemByCode(req.query.code);
+  if (result.error === 'empty') return res.status(400).json({ error: 'Code required' });
+  if (result.error === 'not_found') return res.status(404).json({ error: 'No matching item' });
+  res.json(result);
+});
+
 app.get('/api/studio/map', (_req, res) => {
   const locations = db.prepare(`
     SELECT location, COUNT(*) as item_count,
@@ -352,6 +404,45 @@ app.get('/api/studio/map', (_req, res) => {
     `).all(loc.location || '')
   }));
   res.json({ zones });
+});
+
+app.get('/api/floorplans', (_req, res) => res.json(getFloorplans()));
+
+app.post('/api/floorplans', (req, res) => {
+  try {
+    res.status(201).json(createFloorplan(req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/floorplans/:id/image', floorplanUpload.single('image'), (req, res) => {
+  if (!getFloorplan(req.params.id)) return res.status(404).json({ error: 'Floorplan not found' });
+  if (!req.file) return res.status(400).json({ error: 'Image file required' });
+  const relativePath = path.join('floorplans', req.file.filename).replace(/\\/g, '/');
+  const updated = updateFloorplanImage(req.params.id, relativePath);
+  res.json(updated);
+});
+
+app.put('/api/floorplans/:id/items', (req, res) => {
+  try {
+    res.json(setFloorplanItems(req.params.id, req.body.items || []));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/floorplans/:id', (req, res) => {
+  try {
+    const fp = deleteFloorplan(req.params.id);
+    if (fp.image_path) {
+      const full = path.join(UPLOADS_DIR, fp.image_path);
+      if (fs.existsSync(full)) fs.unlinkSync(full);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.get('/api/racks', (_req, res) => res.json(getRacks()));

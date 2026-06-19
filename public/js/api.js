@@ -112,5 +112,19 @@ export const api = {
   updateGuestSettings: (data) => request('/settings/guest', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   regenerateGuestToken: () => request('/settings/guest/regenerate', { method: 'POST' }),
   searchManuals: (q) => request(`/manuals/search?q=${encodeURIComponent(q)}`),
-  reindexManuals: () => request('/manuals/reindex', { method: 'POST' })
+  reindexManuals: () => request('/manuals/reindex', { method: 'POST' }),
+  lookup: (code) => request(`/lookup?code=${encodeURIComponent(code)}`),
+  floorplans: () => request('/floorplans'),
+  createFloorplan: (data) => request('/floorplans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  uploadFloorplanImage: (id, file) => {
+    const fd = new FormData();
+    fd.append('image', file);
+    return request(`/floorplans/${id}/image`, { method: 'POST', body: fd });
+  },
+  setFloorplanItems: (id, items) => request(`/floorplans/${id}/items`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items })
+  }),
+  deleteFloorplan: (id) => request(`/floorplans/${id}`, { method: 'DELETE' })
 };

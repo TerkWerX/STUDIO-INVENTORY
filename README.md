@@ -72,10 +72,10 @@ Pre-built packages are on the **[Releases](https://github.com/TerkWerX/STUDIO-IN
 
 | Platform | Download | How to run |
 |----------|----------|------------|
-| **Windows** | `Studio-Inventory-v…-Windows.zip` | Extract → double-click **Start Studio Inventory.bat** (or **Install Studio Inventory.bat** for Desktop shortcut) |
+| **Windows** | `Studio-Inventory-v…-Windows.zip` | Extract → double-click **Studio Inventory.exe** (or **Install Studio Inventory.exe** for Desktop/Start Menu shortcuts) |
 | **macOS** | `Studio-Inventory-v…-macOS.zip` or `.dmg` | Extract / open DMG → double-click **Start Studio Inventory.command** (or **Install Studio Inventory.command** to copy to Applications) |
 
-These bundles include Node dependencies — your friends do **not** need to install Node.js or run `npm install`.
+These bundles include the Node runtime and production dependencies — your friends do **not** need to install Node.js or run `npm install`.
 
 ### Updating without losing data
 

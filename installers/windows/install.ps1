@@ -4,7 +4,9 @@ $ErrorActionPreference = 'Stop'
 
 $Source = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Target = Join-Path $env:LOCALAPPDATA 'Studio Inventory'
+$StartExe = Join-Path $Target 'Studio Inventory.exe'
 $StartBat = Join-Path $Target 'Start Studio Inventory.bat'
+$StartTarget = $StartExe
 $DataDir = Join-Path $Target 'data'
 $DataBackup = Join-Path $env:TEMP "studio-inventory-data-backup"
 
@@ -32,12 +34,16 @@ if (Test-Path $DataBackup) {
   Remove-Item $DataBackup -Recurse -Force
 }
 
+if (-not (Test-Path $StartTarget)) {
+  $StartTarget = $StartBat
+}
+
 $WshShell = New-Object -ComObject WScript.Shell
 
 $Desktop = [Environment]::GetFolderPath('Desktop')
 $DesktopLink = Join-Path $Desktop 'Studio Inventory.lnk'
 $Shortcut = $WshShell.CreateShortcut($DesktopLink)
-$Shortcut.TargetPath = $StartBat
+$Shortcut.TargetPath = $StartTarget
 $Shortcut.WorkingDirectory = $Target
 $Shortcut.Description = 'Studio Inventory — local music gear catalog'
 $Shortcut.Save()
@@ -46,7 +52,7 @@ Write-Host "Desktop shortcut created."
 $StartMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $MenuLink = Join-Path $StartMenu 'Studio Inventory.lnk'
 $Shortcut2 = $WshShell.CreateShortcut($MenuLink)
-$Shortcut2.TargetPath = $StartBat
+$Shortcut2.TargetPath = $StartTarget
 $Shortcut2.WorkingDirectory = $Target
 $Shortcut2.Description = 'Studio Inventory — local music gear catalog'
 $Shortcut2.Save()
@@ -58,5 +64,5 @@ Write-Host "Your data is stored in: $DataDir"
 
 $open = Read-Host "Start Studio Inventory now? (Y/n)"
 if ($open -ne 'n' -and $open -ne 'N') {
-  Start-Process $StartBat
+  Start-Process $StartTarget
 }

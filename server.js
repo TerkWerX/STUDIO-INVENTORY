@@ -3,15 +3,23 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const {
   db, DB_PATH, DATA_DIR, UPLOADS_DIR, initSchema,
-  enrichItem, setItemTags, sanitizeItemInput, itemUploadDir,
+  enrichItem, setItemTags, sanitizeItemInput, getTagsForItem, itemUploadDir,
   removeItemUploadDirs, DEFAULT_CATEGORIES, DEFAULT_LOCATIONS,
   ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR,
   addMaintenanceEntry, deleteMaintenanceEntry,
   getActiveLoans, getRecentLoanHistory, checkoutItem, returnLoan, deleteLoanEntry,
   getRacks, getSignalChains,
-  getFloorplans, getFloorplan, createFloorplan, updateFloorplanImage, setFloorplanItems, deleteFloorplan
+  getFloorplans, getFloorplan, createFloorplan, updateFloorplanImage, clearFloorplanFloorImage,
+  updateFloorplanFloorView, updateFloorplanGeometry,
+  setFloorplanItems, deleteFloorplan, getItemMapPlacement, saveItemWallCutout, clearItemWallCutout, wallPhotoDir,
+  floorplanWallPhotosDir, updateFloorplanWallPhoto, updateFloorplanWallCalibration, resolveWallRehang,
+  SOFTWARE_CATEGORIES, LICENSE_TYPES, ACTIVATION_METHODS, PLUGIN_FORMATS,
+  softwareLicenseDir, getAllSoftware, getSoftware, createSoftware, updateSoftware,
+  updateSoftwareScreenshot, clearSoftwareScreenshot, deleteSoftware,
+  getSoftwareRenewals, getSoftwareTotals
 } = require('./db');
 const { parseLookupCode } = require('./lib/lookup-code');
 const { summarizeCompleteness, computeItemCompleteness } = require('./lib/completeness');
@@ -24,10 +32,27 @@ const QRCode = require('qrcode');
 
 const PORT = process.env.PORT || 3847;
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const MAX_MANUAL_DOWNLOAD_SIZE = 50 * 1024 * 1024;
 const FLOORPLANS_DIR = path.join(UPLOADS_DIR, 'floorplans');
+const MANUAL_INBOX_DIR = path.join(DATA_DIR, 'manual-inbox');
 
 initSchema();
 if (!fs.existsSync(FLOORPLANS_DIR)) fs.mkdirSync(FLOORPLANS_DIR, { recursive: true });
+if (!fs.existsSync(MANUAL_INBOX_DIR)) fs.mkdirSync(MANUAL_INBOX_DIR, { recursive: true });
+
+const softwareScreenshotUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => cb(null, softwareLicenseDir(req.params.id)),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      cb(null, `screenshot-${Date.now()}${ext}`);
+    }
+  }),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype.startsWith('image/'));
+  }
+});
 syncBrandsFromItems();
 
 // Fetch logos for all brands in inventory that lack a quality logo (sample set, etc.)
@@ -40,7 +65,10 @@ setTimeout(() => {
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '7d' }));
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  next();
+}, express.static(UPLOADS_DIR, { maxAge: '7d' }));
 
 function safeFilename(name) {
   return String(name).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
@@ -98,6 +126,35 @@ const receiptUpload = createUploader('receipt', {
 });
 
 const softwareUpload = createUploader('software', { maxSize: MAX_FILE_SIZE });
+
+const wallPhotoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => cb(null, wallPhotoDir(req.params.id)),
+    filename: (_req, file, cb) => {
+      const ext = ['.png', '.webp', '.jpg', '.jpeg'].includes(path.extname(file.originalname).toLowerCase())
+        ? path.extname(file.originalname).toLowerCase() : '.png';
+      cb(null, `wall-${Date.now()}${ext}`);
+    }
+  }),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype.startsWith('image/'));
+  }
+});
+
+const wallBackgroundUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => cb(null, floorplanWallPhotosDir(req.params.id)),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      cb(null, `wall-${req.params.edge}-${Date.now()}${ext}`);
+    }
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype.startsWith('image/'));
+  }
+});
 
 const floorplanUpload = multer({
   storage: multer.diskStorage({
@@ -232,6 +289,217 @@ function filenameFromResponse(url, headers) {
   return safeFilename(base || 'download.bin');
 }
 
+function extensionForMime(mime) {
+  const map = {
+    'application/pdf': '.pdf',
+    'application/x-pdf': '.pdf',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'text/plain': '.txt',
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'image/svg+xml': '.svg'
+  };
+  return map[String(mime || '').toLowerCase()] || '';
+}
+
+function normalizeDownloadName(name, mime, fallback = 'manual.pdf') {
+  const clean = safeFilename(name || fallback) || fallback;
+  const ext = path.extname(clean);
+  const inferred = extensionForMime(mime);
+  if (!ext && inferred) return `${clean}${inferred}`;
+  if (clean === 'download.bin' && inferred) return `manual${inferred}`;
+  return clean;
+}
+
+function isManualDownloadAllowed(mime, filename) {
+  const type = String(mime || '').toLowerCase();
+  const ext = path.extname(String(filename || '')).toLowerCase();
+  if (type.includes('text/html')) return false;
+  if (type.startsWith('image/')) return true;
+  if (['.pdf', '.doc', '.docx', '.txt'].includes(ext)) return true;
+  return [
+    'application/pdf',
+    'application/x-pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain',
+    'application/octet-stream',
+    'binary/octet-stream',
+    'application/download',
+    'application/force-download'
+  ].includes(type);
+}
+
+function mimeForManualFile(filename) {
+  const ext = path.extname(String(filename || '')).toLowerCase();
+  return {
+    '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.txt': 'text/plain',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml'
+  }[ext] || 'application/octet-stream';
+}
+
+function ensureManualInboxDir() {
+  if (!fs.existsSync(MANUAL_INBOX_DIR)) fs.mkdirSync(MANUAL_INBOX_DIR, { recursive: true });
+  return MANUAL_INBOX_DIR;
+}
+
+function manualInboxFiles() {
+  ensureManualInboxDir();
+  return fs.readdirSync(MANUAL_INBOX_DIR, { withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => {
+      const fullPath = path.join(MANUAL_INBOX_DIR, entry.name);
+      const stat = fs.statSync(fullPath);
+      return {
+        name: entry.name,
+        size: stat.size,
+        modified_at: stat.mtime.toISOString(),
+        mime_type: mimeForManualFile(entry.name),
+        allowed: isManualDownloadAllowed(mimeForManualFile(entry.name), entry.name)
+      };
+    })
+    .filter(file => file.allowed)
+    .sort((a, b) => new Date(b.modified_at) - new Date(a.modified_at));
+}
+
+function openFolder(folderPath) {
+  const target = path.resolve(folderPath);
+  if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+  const platform = process.platform;
+  const command = platform === 'win32' ? 'explorer.exe' : platform === 'darwin' ? 'open' : 'xdg-open';
+  const child = spawn(command, [target], { detached: true, stdio: 'ignore', windowsHide: true });
+  child.unref();
+}
+
+function moveFileIntoPlace(src, dest) {
+  try {
+    fs.renameSync(src, dest);
+  } catch {
+    fs.copyFileSync(src, dest);
+    fs.unlinkSync(src);
+  }
+}
+
+function decodeHtmlEntities(str = '') {
+  return String(str)
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
+}
+
+function stripHtml(str = '') {
+  return decodeHtmlEntities(String(str).replace(/<[^>]*>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function directManualCandidate(url, mime = '') {
+  try {
+    const u = new URL(url);
+    const ext = path.extname(u.pathname).toLowerCase();
+    const allowedExt = ['.pdf', '.doc', '.docx', '.txt'];
+    return allowedExt.includes(ext) || String(mime).toLowerCase().includes('pdf');
+  } catch {
+    return false;
+  }
+}
+
+function itemManualSearchQuery(item, customQuery = '') {
+  if (customQuery?.trim()) return customQuery.trim().slice(0, 240);
+  const rawTerms = [item.brand, item.model, item.common_name, item.name, item.year];
+  const terms = [];
+  const seen = new Set();
+  rawTerms
+    .map(v => String(v ?? '').trim())
+    .filter(Boolean)
+    .forEach(v => {
+      const key = v.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      terms.push(v);
+    });
+  return `${terms.join(' ')} manual user guide pdf`.trim();
+}
+
+function normalizeSearchUrl(raw) {
+  const decoded = decodeHtmlEntities(raw || '');
+  try {
+    const url = decoded.startsWith('//') ? `https:${decoded}` : decoded;
+    const parsed = new URL(url);
+    const uddg = parsed.searchParams.get('uddg');
+    return uddg ? decodeURIComponent(uddg) : parsed.href;
+  } catch {
+    return '';
+  }
+}
+
+function extractDuckDuckGoResults(html) {
+  const results = [];
+  const seen = new Set();
+  const blockRe = /<div[^>]+class="[^"]*result[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+class="[^"]*result[^"]*"|<\/body>)/gi;
+  let blockMatch;
+  while ((blockMatch = blockRe.exec(html)) && results.length < 12) {
+    const block = blockMatch[1];
+    const linkMatch = block.match(/<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkMatch) continue;
+    const url = normalizeSearchUrl(linkMatch[1]);
+    if (!url || seen.has(url) || url.includes('duckduckgo.com/y.js')) continue;
+    seen.add(url);
+    const snippetMatch = block.match(/<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>|<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    results.push({
+      title: stripHtml(linkMatch[2]) || url,
+      url,
+      displayUrl: url.replace(/^https?:\/\//i, '').replace(/\/$/, ''),
+      snippet: stripHtml(snippetMatch?.[1] || snippetMatch?.[2] || ''),
+      isPdf: directManualCandidate(url)
+    });
+  }
+  return results;
+}
+
+function extractManualLinksFromHtml(pageUrl, html) {
+  const candidates = [];
+  const seen = new Set();
+  const linkRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = linkRe.exec(html)) && candidates.length < 20) {
+    const rawHref = decodeHtmlEntities(match[1]).trim();
+    if (!rawHref || rawHref.startsWith('#') || /^javascript:/i.test(rawHref) || /^mailto:/i.test(rawHref)) continue;
+    let url;
+    try { url = new URL(rawHref, pageUrl).href; } catch { continue; }
+    if (seen.has(url)) continue;
+    const label = stripHtml(match[2]);
+    const pathname = new URL(url).pathname.toLowerCase();
+    const likelyManual = pathname.endsWith('.pdf')
+      || /manual|owner|user guide|guide|instructions|download/i.test(label)
+      || /manual|owner|user[-_ ]?guide|instructions/i.test(pathname);
+    if (!likelyManual) continue;
+    seen.add(url);
+    candidates.push({
+      title: label || path.basename(new URL(url).pathname) || url,
+      url,
+      displayUrl: url.replace(/^https?:\/\//i, '').replace(/\/$/, ''),
+      isPdf: directManualCandidate(url)
+    });
+  }
+  return candidates;
+}
+
 // --- API ---
 
 function requestBaseUrl(req) {
@@ -279,6 +547,8 @@ app.get('/api/stats', (_req, res) => {
   `).all();
   const activeLoans = getActiveLoans();
   const overdueLoans = activeLoans.filter(l => l.overdue);
+  const softwareTotals = getSoftwareTotals();
+  const softwareRenewals = getSoftwareRenewals(30);
   res.json({
     totals,
     byCategory: db.prepare(`SELECT category, COUNT(*) as count, COALESCE(SUM(replacement_value*quantity),0) as total_value FROM items GROUP BY category ORDER BY total_value DESC`).all(),
@@ -290,7 +560,11 @@ app.get('/api/stats', (_req, res) => {
     awayItems,
     activeLoans,
     overdueLoanCount: overdueLoans.length,
-    activeLoanCount: activeLoans.length
+    activeLoanCount: activeLoans.length,
+    softwareTotals,
+    softwareRenewals,
+    softwareRenewalCount: softwareRenewals.length,
+    softwareOverdueCount: softwareRenewals.filter(s => s.overdue).length
   });
 });
 
@@ -424,6 +698,30 @@ app.post('/api/floorplans/:id/image', floorplanUpload.single('image'), (req, res
   res.json(updated);
 });
 
+app.delete('/api/floorplans/:id/floor-image', (req, res) => {
+  try {
+    res.json(clearFloorplanFloorImage(req.params.id));
+  } catch (err) {
+    res.status(err.message.includes('not found') ? 404 : 400).json({ error: err.message });
+  }
+});
+
+app.put('/api/floorplans/:id/floor-image/view', (req, res) => {
+  try {
+    res.json(updateFloorplanFloorView(req.params.id, req.body || {}));
+  } catch (err) {
+    res.status(err.message.includes('not found') ? 404 : 400).json({ error: err.message });
+  }
+});
+
+app.put('/api/floorplans/:id/geometry', (req, res) => {
+  try {
+    res.json(updateFloorplanGeometry(req.params.id, req.body || {}));
+  } catch (err) {
+    res.status(err.message.includes('not found') ? 404 : 400).json({ error: err.message });
+  }
+});
+
 app.put('/api/floorplans/:id/items', (req, res) => {
   try {
     res.json(setFloorplanItems(req.params.id, req.body.items || []));
@@ -440,6 +738,71 @@ app.delete('/api/floorplans/:id', (req, res) => {
       if (fs.existsSync(full)) fs.unlinkSync(full);
     }
     res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/items/:id/placement', (req, res) => {
+  const item = db.prepare('SELECT id FROM items WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  res.json(getItemMapPlacement(req.params.id) || { placed: false });
+});
+
+app.post('/api/floorplans/:id/walls/:edge/photo', wallBackgroundUpload.single('image'), (req, res) => {
+  if (!getFloorplan(req.params.id)) return res.status(404).json({ error: 'Floorplan not found' });
+  if (!req.file) return res.status(400).json({ error: 'Image file required' });
+  const relativePath = path.join('floorplans', 'walls', String(req.params.id), req.file.filename).replace(/\\/g, '/');
+  try {
+    res.json(updateFloorplanWallPhoto(req.params.id, req.params.edge, relativePath));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/floorplans/:id/walls/:edge/calibration', (req, res) => {
+  if (!getFloorplan(req.params.id)) return res.status(404).json({ error: 'Floorplan not found' });
+  try {
+    res.json(updateFloorplanWallCalibration(req.params.id, req.params.edge, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/items/:id/wall-rehang', (req, res) => {
+  const item = db.prepare('SELECT id FROM items WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  try {
+    const placement = resolveWallRehang(req.params.id, req.body?.action);
+    res.json({ placement, item: enrichItem(db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/items/:id/wall-photo', wallPhotoUpload.single('image'), (req, res) => {
+  const item = db.prepare('SELECT id FROM items WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  if (!req.file) return res.status(400).json({ error: 'Image file required' });
+  const relativePath = path.join('wall-photos', String(req.params.id), req.file.filename).replace(/\\/g, '/');
+  res.json({ wall_photo_path: relativePath, url: `/uploads/${relativePath.split('/').map(encodeURIComponent).join('/')}` });
+});
+
+app.put('/api/items/:id/wall-cutout', (req, res) => {
+  const item = db.prepare('SELECT id FROM items WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  try {
+    res.json(saveItemWallCutout(req.params.id, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/items/:id/wall-cutout', (req, res) => {
+  const item = db.prepare('SELECT id FROM items WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  try {
+    res.json(clearItemWallCutout(req.params.id));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -560,8 +923,62 @@ app.get('/api/meta', (_req, res) => {
     locations: [...new Set([...DEFAULT_LOCATIONS, ...locations])],
     tags: db.prepare('SELECT id,name FROM tags ORDER BY name').all(),
     brands: getBrandsWithCounts(),
-    conditions: ['New', 'Excellent', 'Good', 'Fair', 'Poor']
+    conditions: ['New', 'Excellent', 'Good', 'Fair', 'Poor'],
+    softwareCategories: SOFTWARE_CATEGORIES,
+    licenseTypes: LICENSE_TYPES,
+    activationMethods: ACTIVATION_METHODS,
+    pluginFormats: PLUGIN_FORMATS
   });
+});
+
+app.get('/api/software', (req, res) => {
+  res.json(getAllSoftware(req.query));
+});
+
+app.get('/api/software/:id', (req, res) => {
+  const row = getSoftware(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Software license not found' });
+  res.json(row);
+});
+
+app.post('/api/software', (req, res) => {
+  try {
+    res.status(201).json(createSoftware(req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/software/:id', (req, res) => {
+  try {
+    res.json(updateSoftware(req.params.id, req.body || {}));
+  } catch (err) {
+    res.status(err.message.includes('not found') ? 404 : 400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/software/:id', (req, res) => {
+  try {
+    deleteSoftware(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.post('/api/software/:id/screenshot', softwareScreenshotUpload.single('screenshot'), (req, res) => {
+  if (!getSoftware(req.params.id)) return res.status(404).json({ error: 'Software license not found' });
+  if (!req.file) return res.status(400).json({ error: 'Screenshot image required' });
+  const relativePath = path.join('software-licenses', req.params.id, req.file.filename).replace(/\\/g, '/');
+  res.json(updateSoftwareScreenshot(req.params.id, relativePath));
+});
+
+app.delete('/api/software/:id/screenshot', (req, res) => {
+  try {
+    res.json(clearSoftwareScreenshot(req.params.id));
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
 });
 
 app.get('/api/brands', (_req, res) => {
@@ -681,11 +1098,12 @@ app.post('/api/items', (req, res) => {
 });
 
 app.put('/api/items/:id', (req, res) => {
-  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
+  const existingItem = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
+  if (!existingItem)
     return res.status(404).json({ error: 'Item not found' });
-  const data = sanitizeItemInput(req.body);
-  const existing = db.prepare('SELECT replacement_value, value_updated_at FROM items WHERE id=?').get(req.params.id);
-  const valueChanged = existing && Number(existing.replacement_value) !== Number(data.replacement_value);
+  const merged = { ...existingItem, ...(req.body || {}) };
+  const data = sanitizeItemInput(merged);
+  const valueChanged = Number(existingItem.replacement_value) !== Number(data.replacement_value);
   db.prepare(`
     UPDATE items SET name=@name,common_name=@common_name,category=@category,brand=@brand,
       model=@model,serial_number=@serial_number,year=@year,purchase_date=@purchase_date,
@@ -701,7 +1119,10 @@ app.put('/api/items/:id', (req, res) => {
         THEN datetime('now') ELSE value_updated_at END,
       updated_at=datetime('now') WHERE id=@id
   `).run({ ...data, id: req.params.id, value_changed: valueChanged ? 1 : 0 });
-  setItemTags(req.params.id, req.body.tags || []);
+  const tagNames = Object.prototype.hasOwnProperty.call(req.body || {}, 'tags')
+    ? req.body.tags
+    : getTagsForItem(req.params.id).map(t => t.name);
+  setItemTags(req.params.id, tagNames || []);
   if (data.brand) queueBrandLogoFetch(data.brand);
   res.json(enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id)));
 });
@@ -753,7 +1174,11 @@ app.post('/api/items/:id/loans', (req, res) => {
     return res.status(404).json({ error: 'Item not found' });
   try {
     const loan = checkoutItem(req.params.id, req.body || {});
-    res.status(201).json({ loan, item: enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id)) });
+    res.status(201).json({
+      loan,
+      wall_removed: !!loan.wall_removed,
+      item: enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id))
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -763,7 +1188,12 @@ app.put('/api/loans/:id/return', (req, res) => {
   try {
     const loan = returnLoan(req.params.id, req.body || {});
     const item = enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(loan.item_id));
-    res.json({ loan, item });
+    res.json({
+      loan,
+      item,
+      wall_rehang_pending: !!loan.wall_rehang_pending,
+      wall_placement: loan.wall_placement || null
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -845,6 +1275,160 @@ app.post('/api/items/:id/manuals', manualUpload.single('file'), async (req, res)
   res.status(201).json(att);
 });
 
+app.post('/api/items/:id/manuals/archive', async (req, res) => {
+  const item = db.prepare('SELECT id, name FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+
+  const { url, description = '' } = req.body;
+  if (!url || !isValidDownloadUrl(url))
+    return res.status(400).json({ error: 'Valid http/https manual URL required' });
+
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'StudioInventory/1.0 (manual archive)' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(120000)
+    });
+    if (!response.ok) throw new Error(`Download failed: HTTP ${response.status}`);
+
+    const mime = (response.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim().toLowerCase();
+    const origName = normalizeDownloadName(filenameFromResponse(url, response.headers), mime);
+    if (!isManualDownloadAllowed(mime, origName)) {
+      throw new Error('That URL returned a web page instead of a manual file. Copy the direct PDF/manual link and try again.');
+    }
+
+    const storedName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${origName}`;
+    const { dir } = itemUploadDir(req.params.id, 'manual');
+    const fullPath = path.join(dir, storedName);
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > MAX_MANUAL_DOWNLOAD_SIZE) throw new Error('Manual file exceeds 50MB limit');
+    fs.writeFileSync(fullPath, buffer);
+
+    const docType = mime === 'application/pdf' || path.extname(origName).toLowerCase() === '.pdf' ? 'manual' : 'document';
+    const att = insertAttachment(req.params.id, {
+      filename: storedName,
+      originalname: origName,
+      mimetype: mime || 'application/octet-stream'
+    }, docType, {
+      description: String(description || 'Downloaded from manual search').slice(0, 500),
+      source_url: url
+    });
+
+    try { await indexManualAttachment(db, att, item.name, UPLOADS_DIR); } catch { /* ignore */ }
+    res.status(201).json(att);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Manual download failed' });
+  }
+});
+
+app.post('/api/items/:id/manuals/import-inbox', async (req, res) => {
+  const item = db.prepare('SELECT id, name FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+
+  const rawName = String(req.body?.filename || '');
+  const filename = path.basename(rawName);
+  if (!filename || filename !== rawName)
+    return res.status(400).json({ error: 'Choose a file from the Manual Inbox' });
+
+  const srcPath = path.resolve(MANUAL_INBOX_DIR, filename);
+  const inboxRoot = path.resolve(MANUAL_INBOX_DIR);
+  if (!srcPath.startsWith(inboxRoot + path.sep))
+    return res.status(400).json({ error: 'Invalid manual inbox file' });
+  if (!fs.existsSync(srcPath)) return res.status(404).json({ error: 'Manual inbox file not found' });
+
+  const mime = mimeForManualFile(filename);
+  if (!isManualDownloadAllowed(mime, filename))
+    return res.status(400).json({ error: 'Only PDF, document, text, or image manual files can be imported' });
+
+  try {
+    const stat = fs.statSync(srcPath);
+    if (stat.size > MAX_MANUAL_DOWNLOAD_SIZE) throw new Error('Manual file exceeds 50MB limit');
+    const originalName = safeFilename(filename);
+    const storedName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${originalName}`;
+    const { dir } = itemUploadDir(req.params.id, 'manual');
+    const fullPath = path.join(dir, storedName);
+    moveFileIntoPlace(srcPath, fullPath);
+
+    const docType = mime === 'application/pdf' || path.extname(originalName).toLowerCase() === '.pdf' ? 'manual' : 'document';
+    const att = insertAttachment(req.params.id, {
+      filename: storedName,
+      originalname: originalName,
+      mimetype: mime
+    }, docType, {
+      description: 'Imported from Manual Inbox',
+      metadata: { imported_from: 'manual-inbox' }
+    });
+
+    try { await indexManualAttachment(db, att, item.name, UPLOADS_DIR); } catch { /* ignore */ }
+    res.status(201).json({ attachment: att, inbox: { dir: MANUAL_INBOX_DIR, files: manualInboxFiles() } });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Manual inbox import failed' });
+  }
+});
+
+app.post('/api/items/:id/manuals/web-search', async (req, res) => {
+  const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+
+  const query = itemManualSearchQuery(item, req.body?.query || '');
+  if (!query) return res.status(400).json({ error: 'Search query required' });
+
+  try {
+    const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const response = await fetch(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 StudioInventory/1.0 manual finder',
+        'Accept': 'text/html,application/xhtml+xml'
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!response.ok) throw new Error(`Manual search failed: HTTP ${response.status}`);
+    const html = await response.text();
+    res.json({ query, results: extractDuckDuckGoResults(html) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Manual search failed' });
+  }
+});
+
+app.post('/api/items/:id/manuals/discover', async (req, res) => {
+  const item = db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+
+  const { url } = req.body || {};
+  if (!url || !isValidDownloadUrl(url))
+    return res.status(400).json({ error: 'Valid http/https URL required' });
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 StudioInventory/1.0 manual finder',
+        'Accept': 'text/html,application/pdf,application/xhtml+xml,*/*'
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(30000)
+    });
+    if (!response.ok) throw new Error(`Could not inspect page: HTTP ${response.status}`);
+    const mime = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (isManualDownloadAllowed(mime, filenameFromResponse(url, response.headers)) && !mime.includes('text/html')) {
+      return res.json({
+        pageUrl: url,
+        candidates: [{
+          title: normalizeDownloadName(filenameFromResponse(url, response.headers), mime),
+          url,
+          displayUrl: url.replace(/^https?:\/\//i, '').replace(/\/$/, ''),
+          isPdf: directManualCandidate(url, mime)
+        }]
+      });
+    }
+    const html = await response.text();
+    res.json({ pageUrl: url, candidates: extractManualLinksFromHtml(url, html) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not inspect page' });
+  }
+});
+
 app.post('/api/items/:id/receipts', receiptUpload.single('file'), (req, res) => {
   if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
     return res.status(404).json({ error: 'Item not found' });
@@ -893,7 +1477,7 @@ app.post('/api/items/:id/software/archive', async (req, res) => {
     const mime = response.headers.get('content-type') || 'application/octet-stream';
     const att = insertAttachment(req.params.id, {
       filename: storedName,
-      original_name: origName,
+      originalname: origName,
       mimetype: mime.split(';')[0]
     }, 'software', {
       version: String(version).slice(0, 100),
@@ -925,6 +1509,20 @@ app.get('/api/manuals', (_req, res) => {
   `).all());
 });
 
+app.get('/api/manual-inbox', (_req, res) => {
+  res.json({ dir: MANUAL_INBOX_DIR, files: manualInboxFiles() });
+});
+
+app.post('/api/manual-inbox/open', (_req, res) => {
+  try {
+    const files = manualInboxFiles();
+    openFolder(MANUAL_INBOX_DIR);
+    res.json({ ok: true, dir: MANUAL_INBOX_DIR, files });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not open manual inbox folder', dir: MANUAL_INBOX_DIR });
+  }
+});
+
 app.get('/api/documents', (_req, res) => {
   res.json(db.prepare(`
     SELECT a.*, i.name as item_name FROM attachments a
@@ -939,6 +1537,7 @@ app.get('/api/export/json', (_req, res) => {
     exported_at: new Date().toISOString(),
     version: '2.0',
     items: db.prepare('SELECT * FROM items ORDER BY name').all().map(enrichItem),
+    software_licenses: db.prepare('SELECT * FROM software_licenses ORDER BY name').all(),
     tags: db.prepare('SELECT * FROM tags ORDER BY name').all(),
     brands: getBrandsWithCounts()
   };
@@ -947,7 +1546,7 @@ app.get('/api/export/json', (_req, res) => {
 });
 
 app.get('/api/export/sql', (_req, res) => {
-  const tables = ['items', 'tags', 'item_tags', 'attachments', 'brands'];
+  const tables = ['items', 'tags', 'item_tags', 'attachments', 'brands', 'software_licenses'];
   let sql = `-- Studio Inventory SQL Dump\n-- ${new Date().toISOString()}\n\nPRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\n\n`;
   for (const table of tables) {
     const rows = db.prepare(`SELECT * FROM ${table}`).all();

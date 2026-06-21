@@ -34,6 +34,21 @@ export const api = {
     fd.append('file', file);
     return request(`/items/${itemId}/manuals`, { method: 'POST', body: fd });
   },
+  archiveManual: (itemId, url, description = '') => request(`/items/${itemId}/manuals/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, description })
+  }),
+  findManualsOnline: (itemId, query = '') => request(`/items/${itemId}/manuals/web-search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query })
+  }),
+  discoverManualLinks: (itemId, url) => request(`/items/${itemId}/manuals/discover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url })
+  }),
   uploadReceipt: (itemId, file, description = '') => {
     const fd = new FormData();
     fd.append('file', file);
@@ -64,6 +79,13 @@ export const api = {
     return request('/brands/logo', { method: 'POST', body: fd });
   },
   manuals: () => request('/manuals'),
+  manualInbox: () => request('/manual-inbox'),
+  openManualInbox: () => request('/manual-inbox/open', { method: 'POST' }),
+  importManualFromInbox: (itemId, filename) => request(`/items/${itemId}/manuals/import-inbox`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename })
+  }),
   documents: () => request('/documents'),
   exportJson: () => window.open('/api/export/json', '_blank'),
   exportSql: () => window.open('/api/export/sql', '_blank'),
@@ -114,17 +136,71 @@ export const api = {
   searchManuals: (q) => request(`/manuals/search?q=${encodeURIComponent(q)}`),
   reindexManuals: () => request('/manuals/reindex', { method: 'POST' }),
   lookup: (code) => request(`/lookup?code=${encodeURIComponent(code)}`),
-  floorplans: () => request('/floorplans'),
+  floorplans: async () => {
+    const data = await request('/floorplans');
+    if (!Array.isArray(data)) {
+      throw new Error('Could not load floorplans — restart Studio Inventory (npm start) to pick up the latest server.');
+    }
+    return data;
+  },
   createFloorplan: (data) => request('/floorplans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   uploadFloorplanImage: (id, file) => {
     const fd = new FormData();
     fd.append('image', file);
     return request(`/floorplans/${id}/image`, { method: 'POST', body: fd });
   },
+  clearFloorplanFloorImage: (id) => request(`/floorplans/${id}/floor-image`, { method: 'DELETE' }),
+  setFloorplanFloorView: (id, data) => request(`/floorplans/${id}/floor-image/view`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }),
+  setFloorplanGeometry: (id, data) => request(`/floorplans/${id}/geometry`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }),
   setFloorplanItems: (id, items) => request(`/floorplans/${id}/items`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ items })
   }),
-  deleteFloorplan: (id) => request(`/floorplans/${id}`, { method: 'DELETE' })
+  deleteFloorplan: (id) => request(`/floorplans/${id}`, { method: 'DELETE' }),
+  itemPlacement: (id) => request(`/items/${id}/placement`),
+  uploadWallPhoto: (itemId, formData) => request(`/items/${itemId}/wall-photo`, { method: 'POST', body: formData }),
+  saveWallCutout: (itemId, data) => request(`/items/${itemId}/wall-cutout`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }),
+  clearWallCutout: (itemId) => request(`/items/${itemId}/wall-cutout`, { method: 'DELETE' }),
+  uploadWallBackground: (floorplanId, edge, file) => {
+    const fd = new FormData();
+    fd.append('image', file);
+    return request(`/floorplans/${floorplanId}/walls/${edge}/photo`, { method: 'POST', body: fd });
+  },
+  setWallBackgroundCalibration: (floorplanId, edge, data) => request(`/floorplans/${floorplanId}/walls/${edge}/calibration`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  }),
+  wallRehang: (itemId, action) => request(`/items/${itemId}/wall-rehang`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action })
+  }),
+  software: (params = {}) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== '')).toString();
+    return request(`/software${qs ? '?' + qs : ''}`);
+  },
+  softwareItem: (id) => request(`/software/${id}`),
+  createSoftware: (data) => request('/software', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  updateSoftware: (id, data) => request(`/software/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  deleteSoftware: (id) => request(`/software/${id}`, { method: 'DELETE' }),
+  uploadSoftwareScreenshot: (id, file) => {
+    const fd = new FormData();
+    fd.append('screenshot', file);
+    return request(`/software/${id}/screenshot`, { method: 'POST', body: fd });
+  },
+  removeSoftwareScreenshot: (id) => request(`/software/${id}/screenshot`, { method: 'DELETE' })
 };

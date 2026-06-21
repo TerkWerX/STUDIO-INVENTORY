@@ -107,13 +107,74 @@ async function main() {
     }, { timeout: 20000 });
     console.log('✓ loan return (UI)');
 
-    await navTo(page, 'studio-view', '[data-studio-tab="racks"]');
+    await navTo(page, 'studio-setup', '[data-studio-tab="racks"]');
     await page.click('[data-studio-tab="racks"]');
     await page.waitForSelector('#new-rack-form', { timeout: 10000 });
-    await navTo(page, 'studio-view', '[data-studio-tab="floorplans"]');
+    await navTo(page, 'studio-setup', '[data-studio-tab="floorplans"]');
     await page.click('[data-studio-tab="floorplans"]');
     await page.waitForSelector('#floorplan-select', { timeout: 10000 });
-    console.log('✓ studio view floorplans tab');
+    console.log('✓ studio setup floorplans tab');
+
+    await page.click('[data-studio-tab="rooms"]');
+    await page.waitForSelector('#new-room-form', { timeout: 10000 });
+    await page.fill('#room-name', 'Browser Smoke Room');
+    await page.click('#new-room-form button[type="submit"]');
+    await page.waitForSelector('.floorplan-draw-wrap', { timeout: 15000 });
+    await page.click('[data-studio-tab="rooms"]');
+    await page.waitForSelector('[data-action="room-floorplan"]', { timeout: 10000 });
+    await page.locator('[data-action="room-floorplan"]').first().click();
+    await page.waitForSelector('.floorplan-draw-wrap', { timeout: 15000 });
+    const errState = await page.locator('.empty-state h3').textContent().catch(() => '');
+    assert(!String(errState).includes('Error'), `room setup editor failed: ${errState}`);
+    console.log('✓ studio setup edit room');
+
+    const fpId = await page.evaluate(async () => {
+      const fps = await fetch('/api/floorplans').then(r => r.json());
+      const fp = fps[fps.length - 1];
+      if (!fp) return null;
+      await fetch(`/api/floorplans/${fp.id}/geometry`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          polygon: [{ x: 10, y: 10 }, { x: 90, y: 10 }, { x: 90, y: 90 }, { x: 10, y: 90 }],
+          bounds_width: 12,
+          bounds_depth: 12,
+          ceiling_height: 9
+        })
+      });
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'), c => c.charCodeAt(0));
+      const form = new FormData();
+      form.append('image', new Blob([png], { type: 'image/png' }), 'wall.png');
+      await fetch(`/api/floorplans/${fp.id}/walls/0/photo`, { method: 'POST', body: form });
+      await fetch(`/api/floorplans/${fp.id}/walls/0/calibration`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          corners: [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.12 }, { x: 0.88, y: 0.9 }, { x: 0.12, y: 0.88 }],
+          lens_k: 0,
+          calibrated: true
+        })
+      });
+      return fp.id;
+    });
+    assert(fpId, 'floorplan id for studio view wall test');
+
+    await navTo(page, 'studio-view', '.studio-browse');
+    await page.selectOption('#studio-browse-room', String(fpId));
+    await page.waitForSelector(`[data-studio-browse-fp="${fpId}"]`, { timeout: 10000 });
+    await page.click('[data-studio-wall="0"]');
+    await page.waitForSelector('#wall-elevation-overlay:not(.hidden)', { timeout: 20000 });
+    await page.waitForFunction(() => {
+      const img = document.querySelector('.we-wall-bg-underlay, .we-wall-bg-warped');
+      return img && img.complete && img.naturalWidth > 0
+        && (img.src.startsWith('data:image') || img.src.includes('/uploads/'));
+    }, { timeout: 20000 });
+    console.log('✓ studio view wall elevation displays');
+    await page.click('#wall-elevation-overlay .wall-elevation-close');
+    await page.waitForFunction(
+      () => document.getElementById('wall-elevation-overlay')?.classList.contains('hidden'),
+      { timeout: 5000 }
+    );
 
     await navTo(page, 'scan', '#scan-wedge-input');
     await page.fill('#scan-wedge-input', 'SM57-88421');
@@ -121,8 +182,26 @@ async function main() {
     await page.waitForSelector('.scan-result-found', { timeout: 15000 });
     console.log('✓ scan lookup');
 
+    await navTo(page, 'software', '.page-title');
+    assert((await page.textContent('.page-title')).includes('Software'), 'software page title wrong');
+    await page.click('[data-nav="software-form"]');
+    await page.waitForSelector('#software-form', { timeout: 10000 });
+    await page.fill('#sw-name', 'Browser Test Plugin');
+    await page.fill('#sw-publisher', 'Smoke Test Audio');
+    await page.selectOption('#sw-category', 'Plugin');
+    await page.fill('#sw-license-key', 'BROWSER-TEST-KEY');
+    await page.click('#software-form button[type="submit"]');
+    await page.waitForSelector('.sw-detail-title', { timeout: 15000 });
+    assert((await page.textContent('.sw-detail-title')).includes('Browser Test Plugin'), 'software detail failed');
+    console.log('✓ software catalog');
+
     await navTo(page, 'manuals', '#manual-fts-search');
     assert(await page.locator('#manual-search').count() === 1, 'manual list search missing');
+    assert(await page.locator('.manual-finder-card').count() === 1, 'manual finder card missing');
+    assert(await page.locator('.manual-inbox-panel').count() === 1, 'manual inbox panel missing');
+    assert(await page.locator('.manual-finder-row [data-action="manual-web-search"]').count() > 0, 'manual online finder buttons missing');
+    assert(await page.locator('.manual-finder-row [data-action="manual-inbox-import"]').count() > 0, 'manual inbox import buttons missing');
+    assert(await page.locator('.manual-finder-row [data-action="archive-manual-url"]').count() > 0, 'manual archive URL buttons missing');
     console.log('✓ manuals');
 
     await navTo(page, 'backup', '#guest-enabled');

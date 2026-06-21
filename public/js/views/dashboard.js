@@ -14,7 +14,8 @@ function backupAgeLabel() {
 export function renderDashboard(stats, brands = []) {
   const {
     totals, byCategory, byLocation, recent, highValue, completeness,
-    warrantyExpiring, awayItems, activeLoans, overdueLoanCount, activeLoanCount
+    warrantyExpiring, awayItems, activeLoans, overdueLoanCount, activeLoanCount,
+    softwareTotals, softwareRenewals, softwareRenewalCount, softwareOverdueCount
   } = stats;
   const backup = backupAgeLabel();
   const gaps = completeness?.gaps || {};
@@ -47,7 +48,37 @@ export function renderDashboard(stats, brands = []) {
         <div class="reminder-value">${activeLoanCount || 0} out${overdueLoanCount ? ` · ${overdueLoanCount} overdue` : ''}</div>
         <button type="button" class="btn btn-sm btn-secondary" data-nav="loans">View Loans</button>
       </div>
+      <div class="reminder-card ${softwareOverdueCount ? 'reminder-warn' : softwareRenewalCount ? 'reminder-info' : ''}">
+        <div class="reminder-label">Software</div>
+        <div class="reminder-value">${softwareTotals?.count || 0} plugins &amp; DAWs</div>
+        <div class="reminder-sub">${softwareRenewalCount ? `${softwareRenewalCount} renewal${softwareRenewalCount !== 1 ? 's' : ''} soon` : formatCurrency(softwareTotals?.total_value || 0) + ' value'}</div>
+        <button type="button" class="btn btn-sm btn-secondary" data-nav="software">View Catalog</button>
+      </div>
     </div>
+
+    ${softwareRenewals?.length ? `
+    <div class="card">
+      <div class="card-header">
+        <h3 class="section-title">Software Renewals (30 days)</h3>
+        <button type="button" class="btn btn-ghost btn-sm" data-nav="software">All Software</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Software</th><th>Publisher</th><th>Renews</th><th>Value</th></tr></thead>
+          <tbody>
+            ${softwareRenewals.slice(0, 8).map(sw => `
+              <tr data-action="view-software" data-id="${sw.id}" style="cursor:pointer" class="${sw.overdue ? 'loan-row-overdue' : ''}">
+                <td><strong>${sw.name}</strong></td>
+                <td>${sw.publisher || '—'}</td>
+                <td>${sw.overdue ? '<span class="loan-overdue-badge">Overdue</span> ' : ''}${sw.renewal_date ? formatDate(sw.renewal_date) : '—'}</td>
+                <td class="value-cell">${formatCurrency(sw.replacement_value)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    ` : ''}
 
     ${activeLoans?.length ? `
     <div class="card">

@@ -1,5 +1,7 @@
 import { api } from './api.js';
-import { debounce, showToast, showModal, buildDriverSearchUrl, buildValueEstimateUrl } from './utils.js';
+import { debounce, showToast, showModal, showChoiceModal, buildDriverSearchUrl, buildValueEstimateUrl, openLightbox, fileUrl } from './utils.js';
+import { isWallPhotoCalibrated, warpedWallPreviewDataUrl } from './lib/wall-perspective.js';
+import { wallLengthFt } from './lib/floorplan-geometry.js';
 import { renderDashboard } from './views/dashboard.js';
 import {
   renderInventory, renderItemDetail, bindLightbox, bindPhotoDropZone,
@@ -12,10 +14,20 @@ import { renderManuals } from './views/manuals.js';
 import { renderAbout, renderBackup } from './views/about.js';
 import { renderLabelsPage, bindLabelsPageEvents, printSingleItemLabel } from './views/labels.js';
 import { renderBinderPage, getBinderOptionsFromDom, getSelectedBinderItemIds } from './views/binder.js';
-import { renderStudioView, rackItemsPayload, chainItemsPayload } from './views/studio-view.js';
-import { collectFloorplanPins } from './views/floorplan-tab.js';
+import { renderStudioSetup, rackItemsPayload, chainItemsPayload } from './views/studio-setup.js';
+import { renderStudioBrowse } from './views/studio-browse.js';
+import { initFloorplanEditor } from './lib/floorplan-editor.js';
+import { openWallElevation, showItemQuickMenu } from './lib/wall-elevation.js';
+import { applyRoomDisplay } from './lib/floorplan-geometry.js';
+import { formatLength } from './lib/measurement.js';
+import { openItemPlacement } from './lib/item-placement.js';
+import { openWallPhotoEditor } from './lib/wall-photo-editor.js';
+import { cutoutPinForEditor } from './lib/wall-cutout.js';
 import { renderScanLookup, renderScanResult, startCameraScan } from './views/scan-lookup.js';
 import { renderLoans } from './views/loans.js';
+import {
+  renderSoftwareCatalog, renderSoftwareDetail, renderSoftwareForm, collectSoftwareFormData
+} from './views/software.js';
 import { printBinderDocument, printBinderItems, openManualForPrint } from './lib/binder-print.js';
 import { getDymoStatus } from './lib/dymo-labels.js';
 import { loadLabelSettings } from './lib/label-settings.js';
@@ -31,20 +43,65 @@ const state = {
   manualSearch: '',
   manualFtsQuery: '',
   manualFtsResults: null,
+  manualFinder: { itemId: null, query: '', results: [], scans: {}, searched: false, error: '' },
+  manualInbox: { dir: '', files: [] },
   pdfSearchEnabled: true,
   brands: [],
   selectedBrand: null,
   labelPreselectId: null,
   parentItemId: null,
   studioTab: 'rooms',
-  floorplanId: null
+  floorplanId: null,
+  studioBrowseFpId: null,
+  studioBrowseHighlightItemId: null,
+
+  floorplans: [],
+  softwareFilters: { q: '', category: '', sort: 'name' },
+  selectedSoftwareId: null,
+  editSoftwareId: null
 };
 
 const container = document.getElementById('view-container');
 let stopCameraScan = null;
 
+const APP_ASSET_VER = '2.5.19-manualinbox1';
+
+async function ensureFreshAssets() {
+  if (localStorage.getItem('app-asset-ver') === APP_ASSET_VER) return false;
+  if ('serviceWorker' in navigator) {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map(r => r.unregister()));
+  }
+  if ('caches' in window) {
+    const keys = await caches.keys();
+    await Promise.all(keys.map(k => caches.delete(k)));
+  }
+  localStorage.setItem('app-asset-ver', APP_ASSET_VER);
+  location.reload();
+  return true;
+}
+
+async function buildStudioWallSlides(fp) {
+  const photos = fp.wall_photos || {};
+  const edges = Object.keys(photos)
+    .map(k => Number(k))
+    .filter(edge => (photos[edge] || photos[String(edge)])?.path)
+    .sort((a, b) => a - b);
+  const heightFt = fp.ceiling_height || 9.5;
+  return Promise.all(edges.map(async (edge) => {
+    const entry = photos[edge] || photos[String(edge)];
+    const widthFt = wallLengthFt(fp, edge) || fp.bounds_width || 12;
+    const name = `${fp.location} — Wall ${edge + 1}`;
+    const url = isWallPhotoCalibrated(entry)
+      ? await warpedWallPreviewDataUrl(entry.path, entry, widthFt, heightFt)
+      : fileUrl(entry.path);
+    return { edge, url, name };
+  }));
+}
+
 async function init() {
   try {
+    if (await ensureFreshAssets()) return;
     const health = await api.health();
     updateSidebarVersion(health);
     state.meta = await api.meta();
@@ -187,7 +244,8 @@ function setActiveNav(view) {
       (view === 'item-detail' && btn.dataset.view === 'inventory') ||
       (view === 'item-form' && btn.dataset.view === 'item-form') ||
       (view === 'brand-items' && btn.dataset.view === 'brands') ||
-      (view === 'labels' && btn.dataset.view === 'labels'));
+      (view === 'labels' && btn.dataset.view === 'labels') ||
+      (['software-detail', 'software-form'].includes(view) && btn.dataset.view === 'software'));
   });
 }
 
@@ -198,6 +256,7 @@ async function navigate(view, params = {}) {
   }
   if (view !== 'item-detail') cleanupPhotoZoneListeners();
   state.view = view;
+  document.getElementById('main-content')?.classList.toggle('studio-browse-active', view === 'studio-view');
   setActiveNav(view);
   container.innerHTML = '<p style="color:var(--text-muted);padding:2rem">Loading...</p>';
 
@@ -216,7 +275,7 @@ async function navigate(view, params = {}) {
         bindScanLookupEvents();
         break;
 
-      case 'studio-view': {
+      case 'studio-setup': {
         state.meta = state.meta || await api.meta();
         const [map, racks, chains, allItems, floorplans] = await Promise.all([
           api.studioMap(),
@@ -225,12 +284,29 @@ async function navigate(view, params = {}) {
           api.items({ sort: 'name', include_accessories: '1' }),
           api.floorplans()
         ]);
-        state.items = allItems;
-        container.innerHTML = renderStudioView({
-          map, racks, chains, items: allItems, floorplans,
-          locations: state.meta.locations
+        state.items = Array.isArray(allItems) ? allItems : [];
+        state.floorplans = Array.isArray(floorplans) ? floorplans : [];
+        container.innerHTML = renderStudioSetup({
+          map,
+          racks: Array.isArray(racks) ? racks : [],
+          chains: Array.isArray(chains) ? chains : [],
+          items: state.items,
+          floorplans: Array.isArray(floorplans) ? floorplans : [],
+          locations: Array.isArray(state.meta?.locations) ? state.meta.locations : []
         }, state.studioTab, state.floorplanId);
-        bindStudioViewEvents({ map, racks, chains, items: allItems, floorplans });
+        bindStudioSetupEvents();
+        break;
+      }
+
+      case 'studio-view': {
+        state.floorplans = await api.floorplans();
+        container.innerHTML = renderStudioBrowse(
+          state.floorplans,
+          state.studioBrowseFpId,
+          state.studioBrowseHighlightItemId
+        );
+        bindStudioBrowseEvents();
+        state.studioBrowseHighlightItemId = null;
         break;
       }
 
@@ -301,16 +377,51 @@ async function navigate(view, params = {}) {
         break;
       }
 
+      case 'software': {
+        const licenses = await api.software(state.softwareFilters);
+        container.innerHTML = renderSoftwareCatalog(licenses, state.softwareFilters);
+        bindSoftwareEvents();
+        break;
+      }
+
+      case 'software-detail': {
+        const swId = params.id || state.selectedSoftwareId;
+        const sw = await api.softwareItem(swId);
+        state.selectedSoftwareId = sw.id;
+        container.innerHTML = renderSoftwareDetail(sw);
+        bindSoftwareDetailEvents(sw);
+        break;
+      }
+
+      case 'software-form': {
+        state.meta = state.meta || await api.meta();
+        const editSw = state.editSoftwareId ? await api.softwareItem(state.editSoftwareId) : null;
+        const hostItems = await api.items({ sort: 'name' });
+        container.innerHTML = renderSoftwareForm(editSw, { ...state.meta, hostItems });
+        bindSoftwareFormEvents(editSw);
+        break;
+      }
+
       case 'manuals': {
-        const [manuals, guestInfo] = await Promise.all([api.manuals(), api.guestSettings()]);
+        const [manuals, items, guestInfo, manualInbox] = await Promise.all([
+          api.manuals(),
+          api.items({ sort: 'name', include_accessories: '1' }),
+          api.guestSettings(),
+          api.manualInbox()
+        ]);
+        state.items = Array.isArray(items) ? items : [];
+        state.manualInbox = manualInbox || { dir: '', files: [] };
         state.pdfSearchEnabled = guestInfo.pdfSearchEnabled !== false;
         container.innerHTML = renderManuals(manuals, {
           searchQuery: state.manualSearch,
           ftsQuery: state.manualFtsQuery,
           ftsResults: state.manualFtsResults,
-          pdfSearchEnabled: state.pdfSearchEnabled
+          pdfSearchEnabled: state.pdfSearchEnabled,
+          items: state.items,
+          finder: state.manualFinder,
+          inbox: state.manualInbox
         });
-        bindManualEvents(manuals);
+        bindManualEvents(manuals, state.items);
         break;
       }
 
@@ -378,6 +489,12 @@ function bindDashboardEvents() {
     el.addEventListener('click', () => {
       state.selectedItemId = el.dataset.id;
       navigate('item-detail', { id: el.dataset.id });
+    });
+  });
+  container.querySelectorAll('[data-action="view-software"]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.selectedSoftwareId = el.dataset.id;
+      navigate('software-detail', { id: el.dataset.id });
     });
   });
   container.querySelectorAll('[data-nav]').forEach(btn => {
@@ -497,6 +614,58 @@ function bindInventoryEvents() {
 function bindDetailEvents(item) {
   container.querySelector('[data-nav="inventory"]')?.addEventListener('click', () => navigate('inventory'));
 
+  container.querySelector('[data-action="wall-cutout-edit"]')?.addEventListener('click', async () => {
+    await openWallCutoutForItem(item, {
+      onDone: () => navigate('item-detail', { id: item.id })
+    });
+  });
+
+  container.querySelector('[data-action="wall-cutout-remove"]')?.addEventListener('click', async () => {
+    const ok = await showModal({
+      title: 'Remove saved wall cutout?',
+      message: 'This removes the cutout stored on this item. It does not change studio placement.',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await api.clearWallCutout(item.id);
+      showToast('Wall cutout removed', 'success');
+      navigate('item-detail', { id: item.id });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  container.querySelector('[data-action="place-on-map"]')?.addEventListener('click', async () => {
+    const racks = await api.racks().catch(() => []);
+    const floorplans = await api.floorplans();
+    state.floorplans = floorplans;
+    await openItemPlacement({
+      item,
+      floorplans,
+      racks,
+      api,
+      onToast: showToast,
+      onDone: () => navigate('item-detail', { id: item.id })
+    });
+  });
+
+  container.querySelector('[data-action="view-on-map"]')?.addEventListener('click', async () => {
+    const floorplans = await api.floorplans();
+    state.floorplans = floorplans;
+    const fpId = item.map_placement?.floorplan_id
+      || floorplans.find(f => f.location === item.location)?.id;
+    if (!fpId) {
+      showToast('No room map for this item yet', 'error');
+      return;
+    }
+    state.studioBrowseFpId = fpId;
+    state.studioBrowseHighlightItemId = item.id;
+    navigate('studio-view');
+  });
+
   container.querySelector('[data-action="add-accessory"]')?.addEventListener('click', () => {
     state.editItemId = null;
     state.parentItemId = item.id;
@@ -542,7 +711,7 @@ function bindDetailEvents(item) {
   document.getElementById('loan-checkout-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await api.checkoutItem(item.id, {
+      const checkout = await api.checkoutItem(item.id, {
         borrower_name: document.getElementById('loan-borrower').value,
         borrower_contact: document.getElementById('loan-contact').value,
         loaned_at: document.getElementById('loan-date').value,
@@ -550,7 +719,12 @@ function bindDetailEvents(item) {
         note: document.getElementById('loan-note').value,
         condition_out: document.getElementById('loan-condition-out').value
       });
-      showToast('Item checked out', 'success');
+      showToast(
+        checkout.wall_removed
+          ? 'Checked out — removed from wall view until returned'
+          : 'Item checked out',
+        'success'
+      );
       navigate('item-detail', { id: item.id });
     } catch (err) {
       showToast(err.message, 'error');
@@ -561,12 +735,15 @@ function bindDetailEvents(item) {
     e.preventDefault();
     const loanId = e.target.dataset.loanId;
     try {
-      await api.returnLoan(loanId, {
+      const returned = await api.returnLoan(loanId, {
         returned_at: document.getElementById('return-date').value,
         condition_in: document.getElementById('return-condition').value,
         return_note: document.getElementById('return-note').value
       });
       showToast('Item marked returned', 'success');
+      if (returned.wall_rehang_pending) {
+        await promptWallRehang(item, returned.wall_placement);
+      }
       navigate('item-detail', { id: item.id });
     } catch (err) {
       showToast(err.message, 'error');
@@ -659,6 +836,24 @@ function bindDetailEvents(item) {
     const btn = e.currentTarget;
     window.open(buildDriverSearchUrl(btn.dataset.brand, btn.dataset.model), '_blank');
     showToast('Opened driver/firmware search in browser', 'info');
+  });
+
+  container.querySelector('[data-action="manual-web-search"]')?.addEventListener('click', () => {
+    runManualWebSearch(item.id, { itemName: item.name });
+  });
+
+  container.querySelector('[data-action="manual-inbox-import"]')?.addEventListener('click', () => {
+    promptImportManualFromInbox(item.id, {
+      itemName: item.name,
+      onDone: () => navigate('item-detail', { id: item.id })
+    });
+  });
+
+  container.querySelector('[data-action="archive-manual-url"]')?.addEventListener('click', () => {
+    promptArchiveManualFromUrl(item.id, {
+      itemName: item.name,
+      onDone: () => navigate('item-detail', { id: item.id })
+    });
   });
 
   container.querySelector('[data-action="upload-photos"]')?.addEventListener('change', async (e) => {
@@ -796,6 +991,19 @@ function bindFormEvents() {
           }
         }
 
+        const addCutout = await showModal({
+          title: 'Add wall cutout photo?',
+          message: `"${data.name}" is saved. Add an optional life-size cutout for your virtual studio wall? This is separate from inventory photos — you can skip and add it later from the item page.`,
+          confirmText: 'Add cutout',
+          cancelText: 'Skip for now'
+        });
+        if (addCutout) {
+          const fresh = await api.item(created.id);
+          openWallCutoutForItem(fresh, {
+            onDone: () => navigate('item-detail', { id: created.id })
+          });
+        }
+
         navigate('item-detail', { id: created.id });
       }
     } catch (err) {
@@ -808,15 +1016,18 @@ function bindFormEvents() {
   bindBrandSuggest(state.brands || state.meta?.brands || []);
 }
 
-function bindManualEvents(manuals) {
+function bindManualEvents(manuals, items = []) {
   const rerender = () => {
     container.innerHTML = renderManuals(manuals, {
       searchQuery: state.manualSearch,
       ftsQuery: state.manualFtsQuery,
       ftsResults: state.manualFtsResults,
-      pdfSearchEnabled: state.pdfSearchEnabled
+      pdfSearchEnabled: state.pdfSearchEnabled,
+      items,
+      finder: state.manualFinder,
+      inbox: state.manualInbox
     });
-    bindManualEvents(manuals);
+    bindManualEvents(manuals, items);
   };
 
   const doSearch = debounce(() => {
@@ -871,6 +1082,80 @@ function bindManualEvents(manuals) {
     el.addEventListener('click', () => {
       state.selectedItemId = el.dataset.id;
       navigate('item-detail', { id: el.dataset.id });
+    });
+  });
+
+  container.querySelectorAll('[data-action="archive-manual-url"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      promptArchiveManualFromUrl(btn.dataset.id, {
+        itemName: btn.dataset.name || '',
+        onDone: () => navigate('manuals')
+      });
+    });
+  });
+
+  container.querySelector('[data-action="open-manual-inbox"]')?.addEventListener('click', async () => {
+    try {
+      state.manualInbox = await api.openManualInbox();
+      showToast('Manual Inbox folder opened', 'success');
+      rerender();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  container.querySelector('[data-action="refresh-manual-inbox"]')?.addEventListener('click', async () => {
+    try {
+      state.manualInbox = await api.manualInbox();
+      showToast('Manual Inbox refreshed', 'success');
+      rerender();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  container.querySelectorAll('[data-action="manual-inbox-import"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      promptImportManualFromInbox(btn.dataset.id, {
+        itemName: btn.dataset.name || '',
+        onDone: () => navigate('manuals')
+      });
+    });
+  });
+
+  container.querySelectorAll('[data-action="manual-web-search"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      runManualWebSearch(btn.dataset.id, { itemName: btn.dataset.name || '' });
+    });
+  });
+
+  container.querySelector('[data-action="manual-web-search-go"]')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    runManualWebSearch(btn.dataset.id, {
+      itemName: btn.dataset.name || '',
+      query: document.getElementById('manual-web-query')?.value || ''
+    });
+  });
+  document.getElementById('manual-web-query')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const btn = container.querySelector('[data-action="manual-web-search-go"]');
+    if (!btn) return;
+    runManualWebSearch(btn.dataset.id, {
+      itemName: btn.dataset.name || '',
+      query: e.currentTarget.value || ''
+    });
+  });
+
+  container.querySelectorAll('[data-action="scan-manual-result"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      scanManualResultPage(btn.dataset.id, btn.dataset.url);
+    });
+  });
+
+  container.querySelectorAll('[data-action="archive-manual-result"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      archiveManualResult(btn.dataset.id, btn.dataset.url);
     });
   });
 
@@ -987,8 +1272,12 @@ function bindLoansEvents() {
       });
       if (!ok) return;
       try {
-        await api.returnLoan(btn.dataset.id, {});
+        const returned = await api.returnLoan(btn.dataset.id, {});
         showToast('Item marked returned', 'success');
+        if (returned.wall_rehang_pending && returned.wall_placement) {
+          const gear = await api.item(returned.item.id);
+          await promptWallRehang(gear, returned.wall_placement);
+        }
         navigate('loans');
       } catch (err) {
         showToast(err.message, 'error');
@@ -1020,10 +1309,170 @@ function bindLoansEvents() {
   });
 }
 
-function bindStudioViewEvents() {
+function bindSoftwareEvents() {
+  container.querySelectorAll('[data-nav="software-form"]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.editSoftwareId = null;
+      navigate('software-form');
+    });
+  });
+
+  container.querySelectorAll('[data-action="view-software"]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.selectedSoftwareId = el.dataset.id;
+      navigate('software-detail', { id: el.dataset.id });
+    });
+  });
+
+  const applyFilters = debounce(() => {
+    state.softwareFilters = {
+      q: document.getElementById('sw-search')?.value.trim() || '',
+      category: document.getElementById('sw-filter-category')?.value || '',
+      sort: document.getElementById('sw-filter-sort')?.value || 'name'
+    };
+    navigate('software');
+  }, 300);
+
+  document.getElementById('sw-search')?.addEventListener('input', applyFilters);
+  const syncSoftwareFiltersFromDom = () => {
+    state.softwareFilters = {
+      q: document.getElementById('sw-search')?.value.trim() || '',
+      category: document.getElementById('sw-filter-category')?.value || '',
+      sort: document.getElementById('sw-filter-sort')?.value || 'name'
+    };
+  };
+  document.getElementById('sw-filter-category')?.addEventListener('change', () => {
+    syncSoftwareFiltersFromDom();
+    navigate('software');
+  });
+  document.getElementById('sw-filter-sort')?.addEventListener('change', () => {
+    syncSoftwareFiltersFromDom();
+    navigate('software');
+  });
+}
+
+function bindSoftwareDetailEvents(sw) {
+  container.querySelector('[data-action="edit-software"]')?.addEventListener('click', () => {
+    state.editSoftwareId = sw.id;
+    navigate('software-form');
+  });
+
+  container.querySelector('[data-action="delete-software"]')?.addEventListener('click', async () => {
+    const ok = await showModal({
+      title: 'Delete software entry?',
+      message: `Remove "${sw.name}" from your catalog? Screenshot and license data will be deleted.`,
+      confirmText: 'Delete',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await api.deleteSoftware(sw.id);
+      showToast('Software removed', 'success');
+      navigate('software');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+
+  container.querySelector('[data-action="reveal-license"]')?.addEventListener('click', (e) => {
+    const code = container.querySelector('.sw-license-masked');
+    const copyBtn = container.querySelector('[data-action="copy-license"]');
+    if (code) {
+      code.textContent = code.dataset.key || '';
+      e.target.classList.add('hidden');
+      copyBtn?.classList.remove('hidden');
+    }
+  });
+
+  container.querySelector('[data-action="copy-license"]')?.addEventListener('click', async (e) => {
+    const key = e.target.dataset.key;
+    try {
+      await navigator.clipboard.writeText(key);
+      showToast('License key copied', 'success');
+    } catch {
+      showToast('Could not copy — select and copy manually', 'error');
+    }
+  });
+
+  container.querySelector('[data-action="view-item"]')?.addEventListener('click', (e) => {
+    state.selectedItemId = e.target.closest('[data-action="view-item"]')?.dataset.id;
+    navigate('item-detail', { id: state.selectedItemId });
+  });
+
+  container.querySelector('[data-action="upload-sw-screenshot"]')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await api.uploadSoftwareScreenshot(sw.id, file);
+      showToast('Screenshot uploaded', 'success');
+      navigate('software-detail', { id: sw.id });
+    } catch (err) { showToast(err.message, 'error'); }
+    e.target.value = '';
+  });
+
+  container.querySelector('[data-action="remove-sw-screenshot"]')?.addEventListener('click', async () => {
+    const ok = await showModal({
+      title: 'Remove screenshot?',
+      message: 'Delete the interface screenshot for this entry?',
+      confirmText: 'Remove',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await api.removeSoftwareScreenshot(sw.id);
+      showToast('Screenshot removed', 'success');
+      navigate('software-detail', { id: sw.id });
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+function bindSoftwareFormEvents(editSw) {
+  container.querySelector('[data-action="cancel-software-form"]')?.addEventListener('click', () => {
+    if (editSw) navigate('software-detail', { id: editSw.id });
+    else navigate('software');
+  });
+
+  document.getElementById('sw-form-screenshot')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !editSw) return;
+    try {
+      await api.uploadSoftwareScreenshot(editSw.id, file);
+      showToast('Screenshot uploaded', 'success');
+      state.editSoftwareId = editSw.id;
+      navigate('software-form');
+    } catch (err) { showToast(err.message, 'error'); }
+    e.target.value = '';
+  });
+
+  document.getElementById('software-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = collectSoftwareFormData();
+    try {
+      if (editSw) {
+        await api.updateSoftware(editSw.id, data);
+        state.editSoftwareId = null;
+        state.selectedSoftwareId = editSw.id;
+        showToast('Software updated', 'success');
+        navigate('software-detail', { id: editSw.id });
+      } else {
+        const created = await api.createSoftware(data);
+        state.selectedSoftwareId = created.id;
+        showToast('Added to catalog — add a screenshot next!', 'success');
+        navigate('software-detail', { id: created.id });
+      }
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+}
+
+function bindStudioSetupEvents() {
   container.querySelectorAll('[data-studio-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.studioTab = btn.dataset.studioTab;
+      navigate('studio-setup');
+    });
+  });
+
+  container.querySelectorAll('[data-action="open-studio-view"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.studioBrowseFpId = Number(btn.dataset.fp) || null;
       navigate('studio-view');
     });
   });
@@ -1032,6 +1481,41 @@ function bindStudioViewEvents() {
     el.addEventListener('click', () => {
       state.selectedItemId = el.dataset.id;
       navigate('item-detail', { id: el.dataset.id });
+    });
+  });
+
+  document.getElementById('new-room-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const location = document.getElementById('room-name')?.value?.trim();
+    if (!location) return showToast('Enter a room name', 'error');
+    try {
+      const fp = await api.createFloorplan({ location });
+      state.floorplanId = fp.id;
+      state.studioTab = 'floorplans';
+      showToast(`Room “${location}” created — draw the outline next`, 'success');
+      navigate('studio-setup');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+
+  container.querySelectorAll('[data-action="room-floorplan"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.floorplanId = Number(btn.dataset.id);
+      state.studioTab = 'floorplans';
+      navigate('studio-setup');
+    });
+  });
+
+  container.querySelectorAll('[data-action="room-create-floorplan"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const location = decodeURIComponent(btn.dataset.location || '').trim();
+      if (!location) return;
+      try {
+        const fp = await api.createFloorplan({ location });
+        state.floorplanId = fp.id;
+        state.studioTab = 'floorplans';
+        showToast(`Floorplan created for “${location}”`, 'success');
+        navigate('studio-setup');
+      } catch (err) { showToast(err.message, 'error'); }
     });
   });
 
@@ -1044,7 +1528,7 @@ function bindStudioViewEvents() {
         notes: document.getElementById('rack-notes').value
       });
       showToast('Rack created', 'success');
-      navigate('studio-view');
+      navigate('studio-setup');
     } catch (err) { showToast(err.message, 'error'); }
   });
 
@@ -1057,7 +1541,7 @@ function bindStudioViewEvents() {
       });
       showToast('Signal chain created', 'success');
       state.studioTab = 'chains';
-      navigate('studio-view');
+      navigate('studio-setup');
     } catch (err) { showToast(err.message, 'error'); }
   });
 
@@ -1066,7 +1550,7 @@ function bindStudioViewEvents() {
       if (!await showModal({ title: 'Delete rack?', message: 'Remove this rack layout (gear items stay in inventory).', confirmText: 'Delete', danger: true })) return;
       await api.deleteRack(btn.dataset.id);
       showToast('Rack deleted', 'success');
-      navigate('studio-view');
+      navigate('studio-setup');
     });
   });
 
@@ -1075,7 +1559,7 @@ function bindStudioViewEvents() {
       if (!await showModal({ title: 'Delete chain?', message: 'Remove this signal chain layout.', confirmText: 'Delete', danger: true })) return;
       await api.deleteSignalChain(btn.dataset.id);
       showToast('Chain deleted', 'success');
-      navigate('studio-view');
+      navigate('studio-setup');
     });
   });
 
@@ -1097,7 +1581,7 @@ function bindStudioViewEvents() {
       await api.setRackItems(rackId, items);
       showToast('Added to rack', 'success');
       state.studioTab = 'racks';
-      navigate('studio-view');
+      navigate('studio-setup');
     });
   });
 
@@ -1110,7 +1594,7 @@ function bindStudioViewEvents() {
         item_id: s.id, position: i, slot_label: s.slot_label || ''
       }));
       await api.setRackItems(rackId, items);
-      navigate('studio-view');
+      navigate('studio-setup');
     });
   });
 
@@ -1127,7 +1611,7 @@ function bindStudioViewEvents() {
       await api.setSignalChainItems(chainId, items);
       showToast('Added to chain', 'success');
       state.studioTab = 'chains';
-      navigate('studio-view');
+      navigate('studio-setup');
     });
   });
 
@@ -1138,11 +1622,79 @@ function bindStudioViewEvents() {
       const chain = await api.signalChains().then(cs => cs.find(c => String(c.id) === String(chainId)));
       const items = (chain?.items || []).filter(s => s.id !== removeId).map((s, i) => ({ item_id: s.id, position: i }));
       await api.setSignalChainItems(chainId, items);
-      navigate('studio-view');
+      navigate('studio-setup');
     });
   });
 
-  bindFloorplanEvents();
+  bindFloorplanEvents(state.floorplans);
+}
+
+function bindStudioBrowseEvents() {
+  const root = container.querySelector('.studio-browse');
+  if (!root) return;
+
+  const fpId = Number(root.dataset.studioBrowseFp);
+  const fp = (state.floorplans || []).find(f => String(f.id) === String(fpId));
+
+  const mapEl = root.querySelector('#studio-browse-map');
+  if (mapEl && fp) {
+    const bw = parseFloat(mapEl.dataset.boundsWidth) || fp.bounds_width || 0;
+    const bd = parseFloat(mapEl.dataset.boundsDepth) || fp.bounds_depth || 0;
+    if (bw && bd) applyRoomDisplay(mapEl, bw, bd);
+  }
+
+  document.getElementById('studio-browse-room')?.addEventListener('change', (e) => {
+    state.studioBrowseFpId = Number(e.target.value);
+    navigate('studio-view');
+  });
+
+  root.querySelectorAll('.studio-browse-pin').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pin = (fp?.items || []).find(p => String(p.id) === btn.dataset.itemId);
+      showItemQuickMenu({
+        itemId: Number(btn.dataset.itemId),
+        itemName: pin?.name || 'Item',
+        anchorEl: btn,
+        fetchItem: (id) => api.item(id)
+      });
+    });
+  });
+
+  root.querySelectorAll('[data-studio-wall]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        state.floorplans = await api.floorplans();
+        const freshFp = (state.floorplans || []).find(f => String(f.id) === String(fpId));
+        if (!freshFp) {
+          showToast('Room not found — refresh and try again', 'error');
+          return;
+        }
+        const wallEdge = Number(btn.dataset.studioWall);
+        btn.disabled = true;
+        const wallEntry = freshFp.wall_photos?.[wallEdge] || freshFp.wall_photos?.[String(wallEdge)];
+        if (!wallEntry?.path) {
+          showToast('No wall photo yet — add one in Studio Setup', 'error');
+          return;
+        }
+        openWallElevation({
+          fp: freshFp,
+          wallEdge,
+          items: freshFp.items || [],
+          browseMode: true,
+          fetchItem: (id) => api.item(id),
+          onToast: showToast
+        });
+      } catch (err) {
+        showToast(err.message || 'Could not open wall view', 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  const hi = root.querySelector('.studio-browse-pin-highlight');
+  hi?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 function bindScanLookupEvents() {
@@ -1202,84 +1754,349 @@ function bindScanLookupEvents() {
   wedgeInput?.focus();
 }
 
-function bindFloorplanEvents() {
-  const saveFloorplan = debounce(async (id) => {
-    try {
-      await api.setFloorplanItems(id, collectFloorplanPins(id));
-      const status = document.getElementById('floorplan-save-status');
-      if (status) status.textContent = 'Saved';
-    } catch (err) { showToast(err.message, 'error'); }
-  }, 450);
+function syncFloorplanInState(updated) {
+  if (!updated?.id) return;
+  const list = [...(state.floorplans || [])];
+  const idx = list.findIndex(f => String(f.id) === String(updated.id));
+  if (idx >= 0) list[idx] = updated;
+  else list.push(updated);
+  state.floorplans = list;
+}
 
-  container.querySelectorAll('.floorplan-pin').forEach(pin => {
-    const canvas = pin.closest('#floorplan-canvas');
-    const fpId = pin.closest('.floorplan-editor')?.dataset.floorplanId;
-    if (!canvas || !fpId) return;
-
-    pin.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      pin.setPointerCapture(e.pointerId);
-      const onMove = (ev) => {
-        const rect = canvas.getBoundingClientRect();
-        const x = ((ev.clientX - rect.left) / rect.width) * 100;
-        const y = ((ev.clientY - rect.top) / rect.height) * 100;
-        pin.style.left = `${Math.min(97, Math.max(3, x))}%`;
-        pin.style.top = `${Math.min(97, Math.max(3, y))}%`;
-        const status = document.getElementById('floorplan-save-status');
-        if (status) status.textContent = 'Saving…';
-      };
-      const onUp = () => {
-        pin.removeEventListener('pointermove', onMove);
-        pin.removeEventListener('pointerup', onUp);
-        saveFloorplan(fpId);
-      };
-      pin.addEventListener('pointermove', onMove);
-      pin.addEventListener('pointerup', onUp);
-    });
-
-    pin.addEventListener('click', (e) => {
-      if (e.defaultPrevented) return;
-      state.selectedItemId = pin.dataset.itemId;
-      navigate('item-detail', { id: pin.dataset.itemId });
-    });
+async function openWallCutoutForItem(item, { onDone } = {}) {
+  const full = item.photos !== undefined ? item : await api.item(item.id);
+  const floorplans = state.floorplans?.length ? state.floorplans : await api.floorplans();
+  state.floorplans = floorplans;
+  const fp = floorplans.find(f => f.location === full.location);
+  openWallPhotoEditor({
+    item: full,
+    pin: cutoutPinForEditor(full),
+    unit: fp?.unit || 'ft',
+    mode: 'inventory',
+    onSave: async (patch) => {
+      await api.saveWallCutout(full.id, patch);
+      if (full.map_placement?.floorplan_id) {
+        await mergePinUpdates(full.map_placement.floorplan_id, [{ item_id: full.id, ...patch }], fp);
+        state.floorplans = await api.floorplans();
+      }
+      onDone?.();
+    },
+    onToast: showToast
   });
+}
 
-  document.getElementById('floorplan-select')?.addEventListener('change', async (e) => {
+async function openPhotoHangForPin(fpId, fp, pin) {
+  const item = await api.item(pin.id);
+  openWallPhotoEditor({
+    item,
+    pin,
+    unit: fp.unit || 'ft',
+    onSave: async (patch) => {
+      const pins = buildFullFloorplanPins(fp);
+      const row = pins.find(p => p.item_id === pin.id);
+      if (row) Object.assign(row, { placement: 'wall', wall_display: true, ...patch });
+      else pins.push({ item_id: pin.id, placement: 'wall', wall_display: true, ...patch });
+      await api.setFloorplanItems(fpId, pins);
+      await api.saveWallCutout(pin.id, patch).catch(() => {});
+      state.floorplans = await api.floorplans();
+      showToast('Wall photo updated', 'success');
+    },
+    onToast: showToast
+  });
+}
+
+function openFloorplanWallInline(fp, edge, { setupMode = true, onBack } = {}) {
+  const fpId = fp.id;
+  const mount = document.getElementById('floorplan-wall-inline');
+  if (!mount) return null;
+
+  return openWallElevation({
+    fp,
+    wallEdge: edge,
+    items: fp.items || [],
+    mountEl: mount,
+    setupMode,
+    onClose: () => onBack?.(),
+    onUploadWallPhoto: async (file) => {
+      const updated = await api.uploadWallBackground(fpId, edge, file);
+      syncFloorplanInState(updated);
+      Object.assign(fp, updated);
+      return updated;
+    },
+    onSaveWallCalibration: async (data) => {
+      const updated = await api.setWallBackgroundCalibration(fpId, edge, data);
+      syncFloorplanInState(updated);
+      Object.assign(fp, updated);
+      return updated;
+    },
+    onToast: showToast
+  });
+}
+
+function buildFullFloorplanPins(fp) {
+  return (fp?.items || []).map(p => ({
+    item_id: p.id,
+    x_pct: p.x_pct,
+    y_pct: p.y_pct,
+    placement: p.placement || 'floor',
+    wall_edge: p.wall_edge,
+    wall_t: p.wall_t,
+    height_ft: p.height_ft,
+    icon_mode: p.icon_mode,
+    wall_photo_path: p.wall_photo_path,
+    photo_width_ft: p.photo_width_ft,
+    photo_height_ft: p.photo_height_ft,
+    rotation_deg: p.rotation_deg || 0,
+    photo_calibration: p.photo_calibration,
+    wall_display: p.wall_display !== false
+  }));
+}
+
+async function mergePinUpdates(fpId, updates, fp) {
+  const floorplan = fp || (state.floorplans || []).find(f => String(f.id) === String(fpId));
+  const pins = buildFullFloorplanPins(floorplan);
+  for (const u of updates) {
+    const row = pins.find(p => p.item_id === u.item_id);
+    if (row) Object.assign(row, u);
+    else pins.push({ item_id: u.item_id, x_pct: 50, y_pct: 50, ...u });
+  }
+  await api.setFloorplanItems(fpId, pins);
+}
+
+async function promptWallRehang(item, placement) {
+  if (!placement || placement.placement !== 'wall') return;
+  const wallNum = (placement.wall_edge ?? 0) + 1;
+  const height = placement.height_ft != null ? `${formatLength(placement.height_ft, placement.unit || 'in')} up` : 'saved height';
+  const choice = await showChoiceModal({
+    title: `Hang ${item.name} back on the wall?`,
+    message: `This was on Wall ${wallNum} (${height}) before it was loaned out. Where should it go now?`,
+    choices: [
+      { id: 'same', label: 'Same spot', primary: true },
+      { id: 'reposition', label: 'New spot on wall' },
+      { id: 'off_wall', label: 'Not on wall' }
+    ]
+  });
+  if (!choice) return;
+
+  try {
+    await api.wallRehang(item.id, choice);
+    if (choice === 'same') {
+      showToast('Back on the wall at the same spot', 'success');
+    } else if (choice === 'reposition') {
+      const floorplans = state.floorplans?.length ? state.floorplans : await api.floorplans();
+      const racks = await api.racks().catch(() => []);
+      await openItemPlacement({
+        item,
+        floorplans,
+        racks,
+        api,
+        onToast: showToast,
+        onDone: () => navigate('item-detail', { id: item.id })
+      });
+    } else {
+      showToast('Removed from wall — still on the room map', 'success');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function promptArchiveManualFromUrl(itemId, { itemName = '', onDone } = {}) {
+  const url = await showModal({
+    title: 'Save Manual from URL',
+    message: `Paste the direct PDF/manual link${itemName ? ` for "${itemName}"` : ''}. Studio Inventory will copy it into this item's managed manual folder and attach it to the record.`,
+    confirmText: 'Save Manual',
+    cancelText: 'Cancel',
+    prompt: true,
+    promptType: 'url',
+    promptPlaceholder: 'https://manufacturer.com/support/manual.pdf'
+  });
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return;
+
+  try {
+    showToast('Downloading manual into Studio Inventory...', 'info');
+    await api.archiveManual(itemId, trimmed);
+    showToast('Manual saved to this item', 'success');
+    await onDone?.();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function formatFileSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function promptImportManualFromInbox(itemId, { itemName = '', onDone } = {}) {
+  let inbox;
+  try {
+    inbox = await api.manualInbox();
+    state.manualInbox = inbox || { dir: '', files: [] };
+  } catch (err) {
+    showToast(err.message, 'error');
+    return;
+  }
+
+  const files = Array.isArray(inbox.files) ? inbox.files : [];
+  if (!files.length) {
+    await showModal({
+      title: 'Manual Inbox Empty',
+      message: `Save downloaded PDFs/manuals to ${inbox.dir || 'data/manual-inbox'}, then refresh and import them to the matching item.`,
+      confirmText: 'OK',
+      cancelText: 'Close'
+    });
+    return;
+  }
+
+  const filename = await showModal({
+    title: 'Import from Manual Inbox',
+    message: `Choose the downloaded manual to attach${itemName ? ` to "${itemName}"` : ''}. It will be moved into this item's managed manual folder.`,
+    confirmText: 'Import',
+    cancelText: 'Cancel',
+    prompt: true,
+    promptType: 'select',
+    promptOptions: files.map(file => ({
+      value: file.name,
+      label: `${file.name} (${formatFileSize(file.size)})`
+    }))
+  });
+  if (!filename) return;
+
+  try {
+    await api.importManualFromInbox(itemId, filename);
+    state.manualInbox = await api.manualInbox();
+    showToast('Manual imported to this item', 'success');
+    await onDone?.();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function runManualWebSearch(itemId, { query = '', itemName = '' } = {}) {
+  const currentQuery = String(query || '').trim();
+  state.manualFinder = {
+    itemId: String(itemId),
+    query: currentQuery,
+    results: [],
+    scans: {},
+    searched: true,
+    error: ''
+  };
+  if (state.view !== 'manuals') await navigate('manuals');
+
+  try {
+    showToast(`Searching manuals${itemName ? ` for ${itemName}` : ''}...`, 'info');
+    const found = await api.findManualsOnline(itemId, currentQuery);
+    state.manualFinder = {
+      itemId: String(itemId),
+      query: found.query || currentQuery,
+      results: Array.isArray(found.results) ? found.results : [],
+      scans: {},
+      searched: true,
+      error: ''
+    };
+  } catch (err) {
+    state.manualFinder = {
+      ...state.manualFinder,
+      searched: true,
+      error: err.message || 'Manual search failed'
+    };
+    showToast(state.manualFinder.error, 'error');
+  }
+  await navigate('manuals');
+  document.getElementById('manual-web-results')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+async function scanManualResultPage(itemId, url) {
+  try {
+    showToast('Scanning page for manual PDFs...', 'info');
+    const found = await api.discoverManualLinks(itemId, url);
+    state.manualFinder = {
+      ...state.manualFinder,
+      itemId: String(itemId),
+      scans: {
+        ...(state.manualFinder?.scans || {}),
+        [url]: Array.isArray(found.candidates) ? found.candidates : []
+      }
+    };
+    await navigate('manuals');
+    document.getElementById('manual-web-results')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function archiveManualResult(itemId, url) {
+  try {
+    showToast('Saving manual into Studio Inventory...', 'info');
+    await api.archiveManual(itemId, url);
+    showToast('Manual saved to this item', 'success');
+    state.manualFinder = { itemId: null, query: '', results: [], scans: {}, searched: false, error: '' };
+    await navigate('manuals');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function bindFloorplanEvents(floorplans = []) {
+  const drawWrap = container.querySelector('.floorplan-draw-wrap');
+  if (drawWrap) {
+    const fpId = Number(drawWrap.dataset.floorplanId);
+    const fp = floorplans.find(f => String(f.id) === String(fpId))
+      || floorplans.find(f => String(f.id) === String(state.floorplanId));
+    if (fp) {
+      initFloorplanEditor(drawWrap, {
+        fp,
+        onSaveGeometry: (data) => api.setFloorplanGeometry(fpId, data),
+        onSaveFloorView: async (data) => {
+          const updated = await api.setFloorplanFloorView(fpId, data);
+          syncFloorplanInState(updated);
+          Object.assign(fp, updated);
+        },
+        onRefresh: () => { state.studioTab = 'floorplans'; navigate('studio-setup'); },
+        onToast: showToast,
+        onOpenWall: (edge, { onBack }) => {
+          openFloorplanWallInline(fp, edge, { setupMode: true, onBack });
+        }
+      });
+    }
+  }
+
+  document.getElementById('floorplan-select')?.addEventListener('change', (e) => {
     const val = e.target.value;
     if (!val) return;
-    if (val.startsWith('loc:')) {
-      try {
-        const fp = await api.createFloorplan({ location: decodeURIComponent(val.slice(4)) });
-        state.floorplanId = fp.id;
-        state.studioTab = 'floorplans';
-        navigate('studio-view');
-      } catch (err) { showToast(err.message, 'error'); }
-      return;
-    }
     state.floorplanId = Number(val);
     state.studioTab = 'floorplans';
-    navigate('studio-view');
+    navigate('studio-setup');
   });
 
   document.getElementById('floorplan-create')?.addEventListener('click', async () => {
+    const newLoc = document.getElementById('floorplan-new-location')?.value?.trim();
     const select = document.getElementById('floorplan-select');
-    const val = select?.value || '';
-    let location = '';
-    if (val.startsWith('loc:')) location = decodeURIComponent(val.slice(4));
-    else {
-      const text = select?.selectedOptions[0]?.textContent?.replace(' (new)', '').trim();
-      if (text && text !== '— Select location —') location = text;
-    }
+    const selectedText = select?.selectedOptions[0]?.textContent?.trim();
+    const location = newLoc || (selectedText && selectedText !== '— Select a room —' ? selectedText : '');
     if (!location) {
-      showToast('Select a location from the dropdown first', 'error');
+      showToast('Type a new room name or select an existing room', 'error');
       return;
     }
     try {
+      const existing = (state.floorplans || []).find(f => f.location === location);
+      if (existing) {
+        state.floorplanId = existing.id;
+        state.studioTab = 'floorplans';
+        showToast(`Opened “${location}”`, 'success');
+        navigate('studio-setup');
+        return;
+      }
       const fp = await api.createFloorplan({ location });
       state.floorplanId = fp.id;
       state.studioTab = 'floorplans';
-      showToast('Floorplan created — upload a room photo', 'success');
-      navigate('studio-view');
+      showToast(`Room “${location}” created — draw the outline`, 'success');
+      navigate('studio-setup');
     } catch (err) { showToast(err.message, 'error'); }
   });
 
@@ -1291,40 +2108,98 @@ function bindFloorplanEvents() {
       await api.uploadFloorplanImage(fpId, file);
       showToast('Room photo uploaded', 'success');
       state.studioTab = 'floorplans';
-      navigate('studio-view');
+      navigate('studio-setup');
     } catch (err) { showToast(err.message, 'error'); }
     e.target.value = '';
   });
 
-  container.querySelectorAll('[data-action="floorplan-add"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const fpId = container.querySelector('.floorplan-editor')?.dataset.floorplanId;
-      const canvas = document.getElementById('floorplan-canvas');
-      if (!fpId || !canvas) return showToast('Upload a room photo first', 'error');
-      const items = collectFloorplanPins(fpId);
-      items.push({ item_id: Number(btn.dataset.id), x_pct: 50, y_pct: 50 });
-      await api.setFloorplanItems(fpId, items);
-      navigate('studio-view');
-    });
+  container.querySelector('[data-action="fp-switch-draw"]')?.addEventListener('click', async () => {
+    const fpId = container.querySelector('.floorplan-editor')?.dataset.floorplanId
+      || container.querySelector('.floorplan-draw-wrap')?.dataset.floorplanId;
+    if (!fpId) return;
+    try {
+      await api.setFloorplanGeometry(fpId, { map_mode: 'draw' });
+      showToast('Switched to drawn map — outline your room', 'success');
+      state.studioTab = 'floorplans';
+      navigate('studio-setup');
+    } catch (err) { showToast(err.message, 'error'); }
   });
 
-  container.querySelectorAll('[data-action="floorplan-remove"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const fpId = container.querySelector('.floorplan-editor')?.dataset.floorplanId;
-      if (!fpId) return;
-      const items = collectFloorplanPins(fpId).filter(i => i.item_id !== Number(btn.dataset.id));
-      await api.setFloorplanItems(fpId, items);
-      navigate('studio-view');
+  let hiddenPhotoInput = document.getElementById('floorplan-image-input-optional');
+  if (!hiddenPhotoInput) {
+    hiddenPhotoInput = document.createElement('input');
+    hiddenPhotoInput.type = 'file';
+    hiddenPhotoInput.accept = 'image/*';
+    hiddenPhotoInput.hidden = true;
+    hiddenPhotoInput.id = 'floorplan-image-input-optional';
+    container.appendChild(hiddenPhotoInput);
+  }
+  if (!hiddenPhotoInput.dataset.bound) {
+    hiddenPhotoInput.dataset.bound = '1';
+    container.querySelector('[data-action="fp-floor-image"]')?.addEventListener('click', () => {
+      hiddenPhotoInput.click();
+    });
+    hiddenPhotoInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      const fpId = container.querySelector('.floorplan-draw-wrap')?.dataset.floorplanId;
+      if (!file || !fpId) return;
+      const fp = (state.floorplans || []).find(f => String(f.id) === String(fpId));
+      const closed = (fp?.polygon || []).length >= 3;
+      if (!closed) {
+        showToast('Close the room outline first — floor image fills inside the shape only', 'error');
+        e.target.value = '';
+        return;
+      }
+      try {
+        await api.uploadFloorplanImage(fpId, file);
+        showToast('Floor image applied inside room outline', 'success');
+        state.studioTab = 'floorplans';
+        navigate('studio-setup');
+      } catch (err) { showToast(err.message, 'error'); }
+      e.target.value = '';
+    });
+  }
+
+  container.querySelector('[data-action="fp-remove-floor-image"]')?.addEventListener('click', async () => {
+    const fpId = container.querySelector('.floorplan-draw-wrap')?.dataset.floorplanId;
+    if (!fpId) return;
+    try {
+      await api.clearFloorplanFloorImage(fpId);
+      showToast('Floor image removed', 'success');
+      state.floorplans = await api.floorplans();
+      state.studioTab = 'floorplans';
+      navigate('studio-setup');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+
+  const activeFpId = () => container.querySelector('.floorplan-draw-wrap')?.dataset.floorplanId
+    || container.querySelector('.floorplan-editor')?.dataset.floorplanId;
+
+  container.querySelectorAll('[data-action="fp-wall-view"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const fpId = Number(activeFpId());
+      const fp = floorplans.find(f => String(f.id) === String(fpId));
+      if (!fp) return;
+      const edge = Number(btn.dataset.edge);
+      openWallElevation({
+        fp,
+        wallEdge: edge,
+        items: fp.items || [],
+        setupMode: true,
+        onUploadWallPhoto: (file) => api.uploadWallBackground(fpId, edge, file),
+        onSaveWallCalibration: (data) => api.setWallBackgroundCalibration(fpId, edge, data),
+        onToast: showToast
+      });
     });
   });
 
   container.querySelector('[data-action="delete-floorplan"]')?.addEventListener('click', async () => {
     const id = container.querySelector('[data-action="delete-floorplan"]')?.dataset.id;
-    if (!id || !await showModal({ title: 'Delete floorplan?', message: 'Remove this room layout (gear stays in inventory).', confirmText: 'Delete', danger: true })) return;
+    if (!id || !await showModal({ title: 'Delete room setup?', message: 'Remove this room base layout (gear stays in inventory).', confirmText: 'Delete', danger: true })) return;
     await api.deleteFloorplan(id);
     state.floorplanId = null;
     showToast('Floorplan deleted', 'success');
-    navigate('studio-view');
+    navigate('studio-setup');
   });
 }
 
@@ -1511,9 +2386,24 @@ function bindBackupEvents() {
 }
 
 function registerServiceWorker() {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/service-worker.js').catch(() => {});
-  }
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('/service-worker.js').then(reg => {
+    reg.update().catch(() => {});
+    if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    reg.addEventListener('updatefound', () => {
+      const worker = reg.installing;
+      worker?.addEventListener('statechange', () => {
+        if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+          worker.postMessage({ type: 'SKIP_WAITING' });
+        }
+      });
+    });
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (sessionStorage.getItem('sw-reload') === '1') return;
+    sessionStorage.setItem('sw-reload', '1');
+    window.location.reload();
+  });
 }
 
 document.addEventListener('click', (e) => {

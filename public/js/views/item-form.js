@@ -178,6 +178,16 @@ export function renderItemForm(item, meta) {
         </div>
       </div>
 
+      ${!isEdit ? `
+      <div class="card wall-cutout-form-note" style="margin-top:1.5rem">
+        <h3 class="section-title" style="margin-top:0">Wall cutout (optional)</h3>
+        <p class="text-muted-sm" style="margin:0">
+          After saving, you can add a life-size photo cutout for hanging on your virtual studio wall.
+          Inventory photos (all angles) are added separately on the item detail page.
+        </p>
+      </div>
+      ` : ''}
+
       <div class="btn-group" style="margin-top:2rem">
         <button type="submit" class="btn btn-primary">${isEdit ? 'Save Changes' : 'Add Item'}</button>
         <button type="button" class="btn btn-secondary" data-nav="inventory">Cancel</button>

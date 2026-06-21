@@ -9,7 +9,11 @@
 ## What you get
 
 - Catalog gear with photos, serial numbers, values, and locations
-- Upload manuals, receipts, and warranty info
+- Upload manuals, receipts, warranty info, and proof-of-ownership files
+- Find manuals online inside Studio Inventory, save direct PDF links, or import browser downloads from the Manual Inbox
+- Build virtual studio room/wall views with calibrated wall photos and life-size gear cutouts
+- Track loans and temporarily remove loaned gear from wall views
+- Track studio software licenses, renewals, activations, and screenshots
 - Export PDF/CSV reports for insurance
 - Print QR owner labels (DYMO or browser print)
 - Scan labels from your iPhone on the same Wi‑Fi
@@ -49,7 +53,7 @@ When the app shows an **update available** banner, or you see a new release on G
 
 1. Download the latest **macOS .dmg** or `.zip`
 2. Run **`Install Studio Inventory.command`** from the new package
-3. Your existing `data/` folder (inventory, photos, receipts) is **preserved automatically**
+3. Your existing `data/` folder (inventory, photos, manuals, receipts, wall photos, software, and Manual Inbox) is **preserved automatically**
 
 You do not need to re-enter your gear.
 
@@ -151,6 +155,8 @@ chmod +x start-studio-inventory.sh   # only needed once
 | **Save item** | **⌘S** (on item form) |
 
 Your inventory is stored in the `data/` folder next to the app — not in iCloud unless you put the project there on purpose.
+
+Manuals downloaded outside the app should be saved into `data/manual-inbox/`, then imported from **Manuals & Documents → Import from Inbox** so they attach to the right gear record.
 
 ---
 
@@ -285,4 +291,4 @@ Each person runs their own copy with their own `data/` folder.
 
 ---
 
-**Made for home studios.** Track the hardware you can touch — not sample libraries or plugins.
+**Made for home studios.** Start with the hardware you can touch, then keep the manuals, receipts, software licenses, and wall placement organized around it.

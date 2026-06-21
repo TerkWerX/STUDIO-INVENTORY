@@ -3,7 +3,7 @@ import { escapeHtml } from '../utils.js';
 export function renderAbout() {
   return `
     <h2 class="page-title">Help &amp; About</h2>
-    <p class="page-subtitle">Studio Inventory v1.7 — Local music gear management</p>
+    <p class="page-subtitle">Studio Inventory v2.2 — Local music gear management</p>
 
     <div class="card">
       <h3 class="section-title">Getting Started</h3>
@@ -27,16 +27,18 @@ export function renderAbout() {
         <li><strong>Studio status</strong> — Mark gear as loaned, in repair, storage, or away.</li>
         <li><strong>Phone photo upload</strong> — Scan QR on an item to add photos from your phone on the same Wi‑Fi.</li>
         <li><strong>CSV bulk import</strong> — Import dozens of items from a spreadsheet on the Backup page.</li>
-        <li><strong>Studio View</strong> — Room/zone map, rack layouts, and signal-chain diagrams.</li>
+        <li><strong>Studio View</strong> — Full-screen room map and wall elevations; tap gear for item info or manuals.</li>
+        <li><strong>Studio Setup</strong> — Draw rooms, floor textures, wall photos, racks, and signal chains.</li>
         <li><strong>Guest link</strong> — Read-only LAN sharing for bandmates (Backup page).</li>
         <li><strong>Depreciation &amp; insurance flags</strong> — Track depreciated value and policy-listed items.</li>
         <li><strong>Accessories</strong> — Link cases, cables, and spare parts to parent gear.</li>
         <li><strong>PDF manual search</strong> — Full-text search inside uploaded PDF manuals.</li>
         <li><strong>Loan tracking</strong> — Check gear out to bandmates, set due dates, mark returned, full history.</li>
         <li><strong>Scan &amp; lookup</strong> — USB barcode scanner, camera QR/barcode, or serial number → open item.</li>
-        <li><strong>Floorplans</strong> — Upload a room photo and drag gear pins to show where everything sits.</li>
+        <li><strong>Item placement</strong> — From each item page, place on wall (with other gear visible), floor, rack, or another room.</li>
+        <li><strong>Software &amp; plugins</strong> — Catalog DAWs and VSTs with license keys, renewal dates, and interface screenshots.</li>
       </ul>
-      <p style="margin-top:1rem;color:var(--text-muted)">This app tracks <strong>physical hardware only</strong> — not sample libraries or sound assets.</p>
+      <p style="margin-top:1rem;color:var(--text-muted)">Tracks <strong>physical hardware</strong> and <strong>software licenses</strong> — not individual sample libraries or sound packs.</p>
     </div>
 
     <div class="card">

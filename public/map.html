@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+  <meta name="theme-color" content="#0f1419">
+  <title>Studio Map — Tablet View</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/map.css">
+</head>
+<body class="map-tablet-body">
+  <header class="map-tablet-header">
+    <h1>Studio Map</h1>
+    <p class="text-muted-sm" id="map-room-label">Loading…</p>
+    <select id="map-floorplan-select" class="map-select" aria-label="Select room"></select>
+  </header>
+  <main id="map-root" class="map-tablet-main"></main>
+  <div id="map-item-sheet" class="map-item-sheet hidden" role="dialog" aria-modal="true">
+    <button type="button" class="btn btn-ghost map-sheet-close" aria-label="Close">&times;</button>
+    <div id="map-item-sheet-body"></div>
+  </div>
+  <script type="module" src="/js/map.js"></script>
+</body>
+</html>

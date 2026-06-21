@@ -2,6 +2,8 @@ import {
   formatCurrency, formatDate, escapeHtml, fileUrl, brandLogoHtml, isDriverCategory,
   buildDriverSearchUrl, buildValueEstimateUrl, openLightbox, renderWarrantyStrip
 } from '../utils.js';
+import { effectiveWallCutout } from '../lib/wall-cutout.js';
+import { formatLength } from '../lib/measurement.js';
 import {
   renderCompletenessChecklist, renderCompletenessBadge, renderStudioStatusBadge, MAINTENANCE_TYPES
 } from '../lib/completeness-ui.js';
@@ -125,6 +127,8 @@ export function renderItemDetail(item) {
   const brandDisplay = item.brand
     ? brandLogoHtml({ name: item.brand, logo_path: item.brand_logo_path }, 'item-brand-logo', { large: true })
     : '';
+  const wallCutout = effectiveWallCutout(item);
+  const placementUnit = item.map_placement?.unit || 'in';
 
   return `
     <div class="detail-header">
@@ -144,6 +148,59 @@ export function renderItemDetail(item) {
         <button type="button" class="btn btn-accent" data-action="auto-estimate" data-brand="${escapeHtml(item.brand)}" data-model="${escapeHtml(item.model)}" data-name="${escapeHtml(item.name)}">Auto-Estimate Value</button>
         <button type="button" class="btn btn-primary" data-action="edit-item" data-id="${item.id}">Edit</button>
         <button type="button" class="btn btn-danger" data-action="delete-item" data-id="${item.id}">Delete</button>
+      </div>
+    </div>
+
+    <div class="card map-placement-card">
+      <div class="card-header">
+        <h3 class="section-title">Studio placement</h3>
+        ${item.map_placement ? `
+          <button type="button" class="btn btn-secondary btn-sm" data-action="view-on-map">View in Studio</button>
+        ` : ''}
+      </div>
+      ${item.map_placement ? `
+        <p class="text-muted-sm">
+          Placed in <strong>${escapeHtml(item.map_placement.floorplan_location || item.location)}</strong>
+          ${item.map_placement.placement === 'wall' ? ' · wall-mounted' : ' · floor'}
+          ${item.map_placement.height_ft != null ? ` · ${formatLength(item.map_placement.height_ft, placementUnit)} high` : ''}
+          ${item.map_placement.icon_mode === 'photo' ? ' · photo cutout' : ' · brand logo'}
+          ${item.activeLoan || item.map_placement.wall_display === false ? ' · <em>off wall while on loan</em>' : ''}
+        </p>
+      ` : `
+        <p class="text-muted-sm">Not on the studio map yet. Set this item's room location, then place it on a wall, floor, or rack.</p>
+      `}
+      <button type="button" class="btn btn-primary btn-sm" data-action="place-on-map">
+        ${item.map_placement ? 'Change placement' : 'Place in studio'}
+      </button>
+    </div>
+
+    <div class="card wall-cutout-card">
+      <h3 class="section-title">Wall cutout (virtual hang)</h3>
+      <p class="text-muted-sm">
+        Optional life-size photo cutout used only when this item hangs on a studio wall.
+        Separate from inventory photos — you can skip now and add later.
+      </p>
+      ${wallCutout ? `
+        <div class="wall-cutout-preview">
+          <img src="${fileUrl(wallCutout.wall_photo_path)}" alt="Wall cutout preview" class="wall-cutout-preview-img">
+          <div class="wall-cutout-preview-meta">
+            <span>${wallCutout.photo_width_ft > 0 ? `${formatLength(wallCutout.photo_width_ft, placementUnit)} wide` : 'Width not set'}
+              ${wallCutout.photo_height_ft > 0 ? ` · ${formatLength(wallCutout.photo_height_ft, placementUnit)} tall` : ''}</span>
+            ${wallCutout.source === 'inventory' && !item.map_placement?.wall_photo_path
+    ? '<span class="text-muted-sm">Saved — applies when you place on a wall</span>'
+    : '<span class="text-muted-sm">Active on studio wall</span>'}
+          </div>
+        </div>
+      ` : `
+        <p class="text-muted-sm">No cutout yet.</p>
+      `}
+      <div class="btn-group" style="margin-top:0.75rem">
+        <button type="button" class="btn btn-secondary btn-sm" data-action="wall-cutout-edit">
+          ${wallCutout ? 'Edit cutout' : 'Add cutout'}
+        </button>
+        ${wallCutout && item.wall_cutout?.path ? `
+          <button type="button" class="btn btn-ghost btn-sm" data-action="wall-cutout-remove">Remove saved cutout</button>
+        ` : ''}
       </div>
     </div>
 
@@ -274,9 +331,14 @@ export function renderItemDetail(item) {
     <div class="card">
       <div class="card-header">
         <h3 class="section-title">Manuals &amp; Documents</h3>
-        <label class="btn btn-secondary" style="cursor:pointer">
-          Upload Document<input type="file" accept=".pdf,application/pdf,.doc,.docx,.txt" data-action="upload-manual" data-id="${item.id}" hidden>
-        </label>
+        <div class="btn-group">
+          <button type="button" class="btn btn-ghost" data-action="manual-web-search">Find Online</button>
+          <button type="button" class="btn btn-secondary" data-action="manual-inbox-import">Import from Inbox</button>
+          <button type="button" class="btn btn-secondary" data-action="archive-manual-url">Save from URL</button>
+          <label class="btn btn-secondary" style="cursor:pointer">
+            Upload Document<input type="file" accept=".pdf,application/pdf,.doc,.docx,.txt" data-action="upload-manual" data-id="${item.id}" hidden>
+          </label>
+        </div>
       </div>
       ${manuals.length ? `
         <div class="doc-list">

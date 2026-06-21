@@ -1,4 +1,4 @@
-const CACHE = 'studio-inventory-v17';
+const CACHE = 'studio-inventory-v280';
 const ASSETS = [
   '/',
   '/index.html',
@@ -20,10 +20,24 @@ const ASSETS = [
   '/js/views/brands.js',
   '/js/views/labels.js',
   '/js/views/binder.js',
-  '/js/views/studio-view.js',
+  '/js/views/studio-setup.js',
+  '/js/views/studio-browse.js',
+  '/js/lib/item-placement.js',
   '/js/views/loans.js',
   '/js/views/scan-lookup.js',
   '/js/views/floorplan-tab.js',
+  '/js/views/software.js',
+  '/js/lib/floorplan-geometry.js',
+  '/js/lib/floorplan-editor.js',
+  '/js/lib/wall-elevation.js',
+  '/js/lib/wall-photo-editor.js',
+  '/js/lib/measurement.js',
+  '/js/lib/wall-cutout.js',
+  '/js/lib/wall-perspective.js',
+  '/js/lib/wall-calibrator.js',
+  '/map.html',
+  '/css/map.css',
+  '/js/map.js',
   '/js/lib/binder-print.js',
   '/js/lib/completeness-ui.js',
   '/photo-upload.html',
@@ -47,6 +61,10 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+self.addEventListener('message', (e) => {
+  if (e.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
 self.addEventListener('fetch', (e) => {
   if (e.request.url.includes('/uploads/')) {
     e.respondWith(fetch(e.request));
@@ -58,6 +76,19 @@ self.addEventListener('fetch', (e) => {
         status: 503,
         headers: { 'Content-Type': 'application/json' }
       }))
+    );
+    return;
+  }
+  const isAppAsset = e.request.url.includes('/js/') || e.request.url.includes('/css/');
+  if (isAppAsset) {
+    e.respondWith(
+      fetch(e.request).then(res => {
+        if (res.ok && e.request.method === 'GET') {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => caches.match(e.request))
     );
     return;
   }

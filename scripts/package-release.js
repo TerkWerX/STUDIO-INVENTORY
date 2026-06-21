@@ -109,6 +109,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -117,10 +118,11 @@ class StudioInventoryLauncher {
   const string HealthUrl = "http://127.0.0.1:3847/api/health";
 
   [STAThread]
-  static int Main() {
+  static int Main(string[] args) {
+    Application.EnableVisualStyles();
     string exeName = Path.GetFileNameWithoutExtension(Application.ExecutablePath).ToLowerInvariant();
     string root = AppDomain.CurrentDomain.BaseDirectory;
-    return exeName.Contains("install") ? RunInstall(root) : RunStart(root);
+    return exeName.Contains("install") ? RunInstall(root, args) : RunStart(root);
   }
 
   static int RunStart(string root) {
@@ -142,7 +144,10 @@ class StudioInventoryLauncher {
         return Error("Could not start Studio Inventory.\\n\\n" + ex.Message);
       }
 
-      for (int i = 0; i < 20 && !ServerIsRunning(); i++) Thread.Sleep(250);
+      for (int i = 0; i < 40 && !ServerIsRunning(); i++) Thread.Sleep(250);
+      if (!ServerIsRunning()) {
+        return Error("Studio Inventory was launched, but the server did not respond at " + AppUrl + "\\n\\nClose any old Studio Inventory windows and try again.");
+      }
     }
 
     try {
@@ -153,20 +158,102 @@ class StudioInventoryLauncher {
     return 0;
   }
 
-  static int RunInstall(string root) {
-    string script = Path.Combine(root, "installers", "windows", "install.ps1");
-    if (!File.Exists(script)) return Error("Missing installer script: " + script);
+  static int RunInstall(string root, string[] args) {
+    bool silent = HasArg(args, "--silent");
+    bool noStart = HasArg(args, "--no-start");
+    bool noShortcuts = HasArg(args, "--no-shortcuts");
+    string targetOverride = ArgValue(args, "--target");
+    string target = !String.IsNullOrWhiteSpace(targetOverride)
+      ? Path.GetFullPath(targetOverride)
+      : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Studio Inventory");
+    string dataDir = Path.Combine(target, "data");
+    string backupDir = Path.Combine(Path.GetTempPath(), "studio-inventory-data-backup-" + Guid.NewGuid().ToString("N"));
+    string source = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    string targetFull = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
     try {
-      ProcessStartInfo psi = new ProcessStartInfo();
-      psi.FileName = "powershell.exe";
-      psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + Quote(script);
-      psi.WorkingDirectory = root;
-      psi.UseShellExecute = true;
-      Process.Start(psi);
+      if (!File.Exists(Path.Combine(root, "server.js")) || !File.Exists(Path.Combine(root, ".runtime", "node.exe"))) {
+        return Error("This installer is missing required files.\\n\\nExtract the entire ZIP first, then run Install Studio Inventory.exe from the extracted folder.");
+      }
+
+      if (!silent && MessageBox.Show(
+        "Install Studio Inventory to:\\n\\n" + target + "\\n\\nExisting inventory data in that folder will be preserved.",
+        "Install Studio Inventory",
+        MessageBoxButtons.OKCancel,
+        MessageBoxIcon.Information) != DialogResult.OK) {
+        return 0;
+      }
+
+      if (!String.Equals(source, targetFull, StringComparison.OrdinalIgnoreCase)) {
+        if (Directory.Exists(dataDir)) CopyDirectory(dataDir, backupDir);
+        if (Directory.Exists(target)) Directory.Delete(target, true);
+        Directory.CreateDirectory(target);
+        CopyDirectory(root, target);
+        if (Directory.Exists(backupDir)) {
+          string restoredData = Path.Combine(target, "data");
+          if (Directory.Exists(restoredData)) Directory.Delete(restoredData, true);
+          CopyDirectory(backupDir, restoredData);
+        }
+      }
+
+      if (!noShortcuts) CreateShortcuts(target);
+
+      if (silent) return 0;
+
+      DialogResult start = MessageBox.Show(
+        "Studio Inventory is installed.\\n\\nDesktop and Start Menu shortcuts were created.\\n\\nStart Studio Inventory now?",
+        "Studio Inventory Installed",
+        MessageBoxButtons.YesNo,
+        MessageBoxIcon.Information);
+      if (start == DialogResult.Yes && !noStart) return RunStart(target);
       return 0;
     } catch (Exception ex) {
-      return Error("Could not start the installer.\\n\\n" + ex.Message);
+      return Error("Could not install Studio Inventory.\\n\\nClose Studio Inventory if it is already running, then try again.\\n\\nDetails: " + ex.Message);
+    } finally {
+      try {
+        if (Directory.Exists(backupDir)) Directory.Delete(backupDir, true);
+      } catch {}
     }
+  }
+
+  static void CopyDirectory(string sourceDir, string destDir) {
+    Directory.CreateDirectory(destDir);
+    foreach (string dir in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories)) {
+      Directory.CreateDirectory(Path.Combine(destDir, dir.Substring(sourceDir.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+    }
+    foreach (string file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories)) {
+      string rel = file.Substring(sourceDir.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+      string dest = Path.Combine(destDir, rel);
+      Directory.CreateDirectory(Path.GetDirectoryName(dest));
+      File.Copy(file, dest, true);
+    }
+  }
+
+  static void CreateShortcuts(string target) {
+    string exe = Path.Combine(target, "Studio Inventory.exe");
+    if (!File.Exists(exe)) exe = Path.Combine(target, "Start Studio Inventory.bat");
+
+    string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+    if (!String.IsNullOrWhiteSpace(desktop)) {
+      CreateShortcut(Path.Combine(desktop, "Studio Inventory.lnk"), exe, target);
+    }
+
+    string startMenu = Path.Combine(
+      Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+      "Microsoft", "Windows", "Start Menu", "Programs");
+    Directory.CreateDirectory(startMenu);
+    CreateShortcut(Path.Combine(startMenu, "Studio Inventory.lnk"), exe, target);
+  }
+
+  static void CreateShortcut(string linkPath, string targetPath, string workingDirectory) {
+    Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+    object shell = Activator.CreateInstance(shellType);
+    object shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { linkPath });
+    Type shortcutType = shortcut.GetType();
+    shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { targetPath });
+    shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { workingDirectory });
+    shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "Studio Inventory — local music gear catalog" });
+    shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
   }
 
   static bool ServerIsRunning() {
@@ -183,6 +270,20 @@ class StudioInventoryLauncher {
 
   static string Quote(string value) {
     return "\\\"" + value.Replace("\\\"", "\\\\\\\"") + "\\\"";
+  }
+
+  static bool HasArg(string[] args, string name) {
+    foreach (string arg in args) {
+      if (String.Equals(arg, name, StringComparison.OrdinalIgnoreCase)) return true;
+    }
+    return false;
+  }
+
+  static string ArgValue(string[] args, string name) {
+    for (int i = 0; i < args.Length - 1; i++) {
+      if (String.Equals(args[i], name, StringComparison.OrdinalIgnoreCase)) return args[i + 1];
+    }
+    return "";
   }
 
   static int Error(string message) {

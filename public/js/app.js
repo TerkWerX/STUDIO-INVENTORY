@@ -65,7 +65,7 @@ const state = {
 const container = document.getElementById('view-container');
 let stopCameraScan = null;
 
-const APP_ASSET_VER = '2.5.22-labelscan1';
+const APP_ASSET_VER = '2.5.23-usability1';
 
 async function ensureFreshAssets() {
   if (localStorage.getItem('app-asset-ver') === APP_ASSET_VER) return false;
@@ -988,6 +988,8 @@ function bindDetailEvents(item) {
 function bindFormEvents() {
   const tagContainer = document.getElementById('tag-container');
   const tagInput = document.getElementById('tag-input');
+  bindItemFormMode();
+  bindPowerAdapterToggle();
   bindLabelScanEvents();
 
   function addTag(name) {
@@ -1077,6 +1079,42 @@ function bindFormEvents() {
   bindBrandSuggest(state.brands || state.meta?.brands || []);
 }
 
+function bindItemFormMode() {
+  const form = document.getElementById('item-form');
+  if (!form) return;
+  const modeButtons = [...form.querySelectorAll('[data-form-mode]')];
+  const fullOnly = [...form.querySelectorAll('.form-mode-full-only')];
+  const setMode = (mode) => {
+    const nextMode = mode === 'full' ? 'full' : 'essential';
+    form.dataset.mode = nextMode;
+    fullOnly.forEach(el => { el.hidden = nextMode !== 'full'; });
+    modeButtons.forEach(btn => {
+      const active = btn.dataset.formMode === nextMode;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  };
+  modeButtons.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.formMode)));
+  setMode(form.dataset.defaultMode || 'essential');
+}
+
+function bindPowerAdapterToggle() {
+  const requiresPower = document.getElementById('requires_power');
+  const powerDetails = [...document.querySelectorAll('[data-power-detail]')];
+  if (!requiresPower || !powerDetails.length) return;
+  const hasPowerText = () => ['power_adapter_voltage', 'power_adapter_current', 'power_adapter_polarity', 'power_adapter_notes']
+    .some(id => String(document.getElementById(id)?.value || '').trim());
+  const update = () => {
+    const show = requiresPower.checked || hasPowerText();
+    powerDetails.forEach(el => { el.hidden = !show; });
+  };
+  requiresPower.addEventListener('change', update);
+  powerDetails.forEach(group => {
+    group.querySelector('input, textarea, select')?.addEventListener('input', update);
+  });
+  update();
+}
+
 function labelScanSummary(scan) {
   const s = scan?.suggestions || {};
   const rows = [
@@ -1106,7 +1144,17 @@ function applyLabelScanSuggestions(suggestions, mode = 'blank') {
   applyText('power_adapter_polarity', suggestions.power_adapter_polarity);
   applyText('power_adapter_notes', suggestions.power_adapter_notes);
   const requiresPower = document.getElementById('requires_power');
-  if (requiresPower && suggestions.requires_power) requiresPower.checked = true;
+  const hasPowerSuggestion = !!(
+    suggestions.requires_power ||
+    suggestions.power_adapter_voltage ||
+    suggestions.power_adapter_current ||
+    suggestions.power_adapter_polarity ||
+    suggestions.power_adapter_notes
+  );
+  if (requiresPower && hasPowerSuggestion) {
+    requiresPower.checked = true;
+    requiresPower.dispatchEvent(new Event('change', { bubbles: true }));
+  }
   document.getElementById('brand')?.dispatchEvent(new Event('change'));
 }
 

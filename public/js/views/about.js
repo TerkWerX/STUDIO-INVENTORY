@@ -3,7 +3,7 @@ import { escapeHtml } from '../utils.js';
 export function renderAbout() {
   return `
     <h2 class="page-title">Help &amp; About</h2>
-    <p class="page-subtitle">Studio Inventory v2.2 — Local music gear management</p>
+    <p class="page-subtitle">Studio Inventory v2.5.8 — Local music gear management</p>
 
     <div class="card">
       <h3 class="section-title">Getting Started</h3>
@@ -160,14 +160,22 @@ export function renderBackup(guest = {}, ownerAuth = {}) {
     </div>
 
     <div class="card">
-      <h3 class="section-title">Export Data</h3>
-      <p style="color:var(--text-secondary);margin-bottom:1rem">Download a complete ZIP backup, or export lighter report formats.</p>
-      <div class="btn-group">
-        <button type="button" class="btn btn-primary" id="backup-export-full">Full Backup ZIP</button>
-        <button type="button" class="btn btn-primary" id="backup-export-json">Export JSON</button>
-        <button type="button" class="btn btn-secondary" id="backup-export-sql">Export SQL Dump</button>
-        <button type="button" class="btn btn-secondary" id="backup-export-csv">Export CSV</button>
+      <h3 class="section-title">Full Backup</h3>
+      <p style="color:var(--text-secondary);margin-bottom:1rem">
+        Download one ZIP containing the database plus managed photos, manuals, receipts, software files, wall photos, and the manual inbox.
+      </p>
+      <div class="backup-primary-export">
+        <button type="button" class="btn btn-primary btn-large" id="backup-export-full">Full Backup ZIP</button>
       </div>
+      <details class="advanced-export-details">
+        <summary>Advanced exports</summary>
+        <p class="text-muted-sm">Use these for spreadsheets, debugging, or database migration. They are not complete media backups.</p>
+        <div class="btn-group advanced-export-actions">
+          <button type="button" class="btn btn-secondary" id="backup-export-json">Export JSON</button>
+          <button type="button" class="btn btn-secondary" id="backup-export-sql">Export SQL Dump</button>
+          <button type="button" class="btn btn-secondary" id="backup-export-csv">Export CSV</button>
+        </div>
+      </details>
     </div>
 
     <div class="card">

@@ -319,6 +319,70 @@ body {
 
 .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
 .form-group.full-width { grid-column: 1 / -1; }
+.item-form-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.form-mode-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.segmented-control {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+  padding: 0.25rem;
+}
+
+.segmented-option {
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 700;
+  min-height: 40px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.segmented-option.active {
+  background: var(--accent);
+  color: white;
+}
+
+.inline-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.label-scan-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  background: color-mix(in srgb, var(--bg-tertiary) 72%, transparent);
+}
+
+.label-scan-status:not(:empty) {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--input-bg);
+}
+
+.wall-cutout-form-note {
+  border-top: 1px solid var(--border);
+  margin-top: 0.25rem;
+  padding-top: 1.25rem;
+}
 
 label {
   font-size: var(--font-sm);
@@ -1471,6 +1535,49 @@ tbody tr:hover { background: var(--bg-hover); }
   color: var(--accent);
 }
 .value-trio-note { margin-top: 0.75rem; }
+.value-meta-grid {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.documentation-summary-card .field-value,
+.identity-card .field-value,
+.power-card .field-value {
+  word-break: break-word;
+}
+
+.backup-primary-export {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.btn-large {
+  min-height: 52px;
+  padding-inline: 1.35rem;
+  font-size: var(--font-lg);
+}
+
+.advanced-export-details {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.advanced-export-details summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.advanced-export-details[open] summary {
+  margin-bottom: 0.75rem;
+}
+
+.advanced-export-actions {
+  margin-top: 0.75rem;
+}
 
 .policy-badge {
   display: inline-block;

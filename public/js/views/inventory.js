@@ -129,6 +129,13 @@ export function renderItemDetail(item) {
     : '';
   const wallCutout = effectiveWallCutout(item);
   const placementUnit = item.map_placement?.unit || 'in';
+  const powerRecorded = !!(
+    item.requires_power ||
+    item.power_adapter_voltage ||
+    item.power_adapter_current ||
+    item.power_adapter_polarity ||
+    item.power_adapter_notes
+  );
 
   return `
     <div class="detail-header">
@@ -217,8 +224,55 @@ export function renderItemDetail(item) {
 
     ${renderCompletenessChecklist(item.completeness)}
 
+    <div class="card identity-card">
+      <h3 class="section-title">Identity</h3>
+      <div class="detail-grid">
+        <div class="detail-field"><div class="field-label">Category</div><div class="field-value">${escapeHtml(item.category)}</div></div>
+        <div class="detail-field"><div class="field-label">Brand</div><div class="field-value">${escapeHtml(item.brand) || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Model</div><div class="field-value">${escapeHtml(item.model) || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Serial Number</div><div class="field-value">${escapeHtml(item.serial_number) || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Year</div><div class="field-value">${escapeHtml(item.year) || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Location</div><div class="field-value">${escapeHtml(item.location) || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Condition</div><div class="field-value"><span class="condition-badge condition-${item.condition}">${item.condition}</span></div></div>
+        <div class="detail-field"><div class="field-label">Quantity</div><div class="field-value">${item.quantity}</div></div>
+        <div class="detail-field"><div class="field-label">Update Checks</div><div class="field-value">${item.update_checks_enabled ? '<span class="status-on">Enabled</span>' : '<span class="status-off">Disabled</span>'}</div></div>
+      </div>
+      ${item.studio_status_note ? `<div class="detail-field mt-1"><div class="field-label">Status Note</div><div class="field-value field-value-sm">${escapeHtml(item.studio_status_note)}</div></div>` : ''}
+      ${item.condition_notes ? `<div class="detail-field mt-1"><div class="field-label">Condition Notes</div><div class="field-value field-value-sm">${escapeHtml(item.condition_notes)}</div></div>` : ''}
+      ${item.description ? `<div class="detail-field mt-1"><div class="field-label">Description</div><div class="field-value field-value-sm">${escapeHtml(item.description)}</div></div>` : ''}
+      ${item.tags?.length ? `
+        <div class="mt-1">
+          <div class="field-label">Tags</div>
+          <div class="tag-row">${item.tags.map(t => `<span class="tag-chip">${escapeHtml(t.name)}</span>`).join('')}</div>
+        </div>
+      ` : ''}
+    </div>
+
+    <div class="card documentation-summary-card">
+      <h3 class="section-title">Documentation</h3>
+      <div class="detail-grid">
+        <div class="detail-field"><div class="field-label">Photos</div><div class="field-value">${photos.length}</div></div>
+        <div class="detail-field"><div class="field-label">Manuals</div><div class="field-value">${manuals.length}</div></div>
+        <div class="detail-field"><div class="field-label">Receipts</div><div class="field-value">${receipts.length}</div></div>
+        <div class="detail-field"><div class="field-label">Software Files</div><div class="field-value">${software.length}</div></div>
+      </div>
+    </div>
+
+    ${powerRecorded ? `
+    <div class="card power-card">
+      <h3 class="section-title">Power</h3>
+      <div class="detail-grid">
+        <div class="detail-field"><div class="field-label">Requires Power</div><div class="field-value">${item.requires_power ? 'Yes' : 'No'}</div></div>
+        <div class="detail-field"><div class="field-label">Adapter Voltage</div><div class="field-value">${escapeHtml(item.power_adapter_voltage || '') || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Adapter Current</div><div class="field-value">${escapeHtml(item.power_adapter_current || '') || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Adapter Polarity</div><div class="field-value">${escapeHtml(item.power_adapter_polarity || '') || '—'}</div></div>
+      </div>
+      ${item.power_adapter_notes ? `<div class="detail-field mt-1"><div class="field-label">Power Notes</div><div class="field-value field-value-sm">${escapeHtml(item.power_adapter_notes)}</div></div>` : ''}
+    </div>
+    ` : ''}
+
     <div class="card value-trio-card">
-      <h3 class="section-title">Values</h3>
+      <h3 class="section-title">Value &amp; Insurance</h3>
       <div class="value-trio">
         <div class="value-trio-item">
           <span class="value-trio-label">Purchase</span>
@@ -232,6 +286,10 @@ export function renderItemDetail(item) {
           <span class="value-trio-label">Depreciated</span>
           <span class="value-trio-amount">${formatCurrency(item.depreciated_value || 0)}</span>
         </div>
+      </div>
+      <div class="detail-grid value-meta-grid">
+        <div class="detail-field"><div class="field-label">Purchase Date</div><div class="field-value">${formatDate(item.purchase_date)}</div></div>
+        <div class="detail-field"><div class="field-label">Insurance Policy</div><div class="field-value">${item.on_insurance_policy ? 'Listed' : 'Not listed'}</div></div>
       </div>
       ${item.replacement_value_note ? `<p class="text-muted-sm value-trio-note">${escapeHtml(item.replacement_value_note)}</p>` : ''}
       ${item.insurance_policy_note ? `<p class="text-muted-sm value-trio-note">Policy: ${escapeHtml(item.insurance_policy_note)}</p>` : ''}
@@ -303,34 +361,6 @@ export function renderItemDetail(item) {
           `).join('')}
         </div>
       ` : `<p class="text-muted photo-drop-empty">No photos yet. Drop images here or upload from all angles for insurance documentation.</p>`}
-    </div>
-
-    <div class="card">
-      <div class="detail-grid">
-        <div class="detail-field"><div class="field-label">Category</div><div class="field-value">${escapeHtml(item.category)}</div></div>
-        <div class="detail-field"><div class="field-label">Brand</div><div class="field-value">${escapeHtml(item.brand)}</div></div>
-        <div class="detail-field"><div class="field-label">Model</div><div class="field-value">${escapeHtml(item.model)}</div></div>
-        <div class="detail-field"><div class="field-label">Serial Number</div><div class="field-value">${escapeHtml(item.serial_number) || '—'}</div></div>
-        <div class="detail-field"><div class="field-label">Year</div><div class="field-value">${escapeHtml(item.year) || '—'}</div></div>
-        <div class="detail-field"><div class="field-label">Location</div><div class="field-value">${escapeHtml(item.location)}</div></div>
-        <div class="detail-field"><div class="field-label">Condition</div><div class="field-value"><span class="condition-badge condition-${item.condition}">${item.condition}</span></div></div>
-        <div class="detail-field"><div class="field-label">Quantity</div><div class="field-value">${item.quantity}</div></div>
-        <div class="detail-field"><div class="field-label">Requires Power</div><div class="field-value">${item.requires_power ? 'Yes' : 'No'}</div></div>
-        <div class="detail-field"><div class="field-label">Adapter Voltage</div><div class="field-value">${escapeHtml(item.power_adapter_voltage || '') || '—'}</div></div>
-        <div class="detail-field"><div class="field-label">Adapter Current</div><div class="field-value">${escapeHtml(item.power_adapter_current || '') || '—'}</div></div>
-        <div class="detail-field"><div class="field-label">Adapter Polarity</div><div class="field-value">${escapeHtml(item.power_adapter_polarity || '') || '—'}</div></div>
-        <div class="detail-field"><div class="field-label">Purchase Date</div><div class="field-value">${formatDate(item.purchase_date)}</div></div>
-        <div class="detail-field"><div class="field-label">Update Checks</div><div class="field-value">${item.update_checks_enabled ? '<span class="status-on">Enabled</span>' : '<span class="status-off">Disabled</span>'}</div></div>
-      </div>
-      ${item.power_adapter_notes ? `<div class="detail-field mt-1"><div class="field-label">Power Notes</div><div class="field-value field-value-sm">${escapeHtml(item.power_adapter_notes)}</div></div>` : ''}
-      ${item.condition_notes ? `<div class="detail-field mt-1"><div class="field-label">Condition Notes</div><div class="field-value field-value-sm">${escapeHtml(item.condition_notes)}</div></div>` : ''}
-      ${item.description ? `<div class="detail-field mt-1"><div class="field-label">Description</div><div class="field-value field-value-sm">${escapeHtml(item.description)}</div></div>` : ''}
-      ${item.tags?.length ? `
-        <div class="mt-1">
-          <div class="field-label">Tags</div>
-          <div class="tag-row">${item.tags.map(t => `<span class="tag-chip">${escapeHtml(t.name)}</span>`).join('')}</div>
-        </div>
-      ` : ''}
     </div>
 
     <div class="card">

@@ -17,23 +17,27 @@ export function renderItemForm(item, meta) {
   const onPolicy = data.on_insurance_policy === true || data.on_insurance_policy === 1;
   const tagNames = (data.tags || []).map(t => typeof t === 'string' ? t : t.name);
   const checksOn = data.update_checks_enabled !== false && data.update_checks_enabled !== 0;
+  const defaultFormMode = isEdit ? 'full' : 'essential';
+  const hasPowerDetails = !!(
+    data.power_adapter_voltage ||
+    data.power_adapter_current ||
+    data.power_adapter_polarity ||
+    data.power_adapter_notes
+  );
+  const showPowerDetails = data.requires_power === true || data.requires_power === 1 || hasPowerDetails;
 
   return `
     <h2 class="page-title">${isEdit ? 'Edit Item' : 'Add New Item'}</h2>
     <p class="page-subtitle">${isEdit ? 'Update inventory record' : 'Enter details for physical studio gear'}</p>
 
-    <form id="item-form" class="card">
+    <form id="item-form" class="card item-form-card" data-default-mode="${defaultFormMode}">
       <input type="hidden" id="item-id" value="${data.id || ''}">
 
-      <div class="form-section label-scan-section" style="margin-bottom:1.25rem">
-        <div class="card-header">
-          <h3 class="section-title">Gear Label Scan</h3>
-          <label class="btn btn-secondary btn-sm" style="cursor:pointer">
-            Scan Label<input type="file" id="label-scan-file" accept="image/*" capture="environment" hidden>
-          </label>
+      <div class="form-mode-toolbar">
+        <div class="segmented-control" role="group" aria-label="Item form detail level">
+          <button type="button" class="segmented-option" data-form-mode="essential">Essential</button>
+          <button type="button" class="segmented-option" data-form-mode="full">Full Details</button>
         </div>
-        <p class="text-muted-sm" style="margin-bottom:0.75rem">Photograph the manufacturer label or serial plate. Suggested brand, model, serial, and power data can be applied after review.</p>
-        <div id="label-scan-status" class="text-muted-sm"></div>
       </div>
 
       <div class="form-grid">
@@ -41,7 +45,7 @@ export function renderItemForm(item, meta) {
           <label for="name">Name *</label>
           <input type="text" id="name" required value="${escapeHtml(data.name)}" placeholder="e.g. Fender Stratocaster">
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="common_name">Common Name</label>
           <input type="text" id="common_name" value="${escapeHtml(data.common_name)}" placeholder="e.g. Main Strat">
         </div>
@@ -70,7 +74,17 @@ export function renderItemForm(item, meta) {
           <label for="serial_number">Serial Number</label>
           <input type="text" id="serial_number" value="${escapeHtml(data.serial_number)}">
         </div>
-        <div class="form-group">
+        <div class="form-group full-width label-scan-section">
+          <div class="inline-section-header">
+            <h3 class="section-title">Scan Manufacturer Label</h3>
+            <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+              Scan Label<input type="file" id="label-scan-file" accept="image/*" capture="environment" hidden>
+            </label>
+          </div>
+          <p class="text-muted-sm">Photograph the serial plate or power label. Suggested brand, model, serial, and adapter data can be applied after review.</p>
+          <div id="label-scan-status" class="text-muted-sm label-scan-status"></div>
+        </div>
+        <div class="form-group form-mode-full-only">
           <label for="year">Year / Manufacture Date</label>
           <input type="text" id="year" value="${escapeHtml(data.year)}" placeholder="e.g. 2021">
         </div>
@@ -81,7 +95,7 @@ export function renderItemForm(item, meta) {
             ${meta.locations.map(l => `<option value="${escapeHtml(l)}" ${data.location === l ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
           </select>
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="studio_status">Studio Status</label>
           <select id="studio_status">
             <option value="in_studio" ${(data.studio_status || 'in_studio') === 'in_studio' ? 'selected' : ''}>In studio</option>
@@ -91,7 +105,7 @@ export function renderItemForm(item, meta) {
             <option value="away" ${data.studio_status === 'away' ? 'selected' : ''}>Away (gig, other room, etc.)</option>
           </select>
         </div>
-        <div class="form-group full-width">
+        <div class="form-group full-width form-mode-full-only">
           <label for="studio_status_note">Status Note</label>
           <input type="text" id="studio_status_note" value="${escapeHtml(data.studio_status_note || '')}" placeholder="e.g. At Mike's studio until Friday, UPS to Sweetwater repair">
         </div>
@@ -112,40 +126,40 @@ export function renderItemForm(item, meta) {
             <span>Requires power adapter or power cable</span>
           </label>
         </div>
-        <div class="form-group">
+        <div class="form-group power-adapter-detail" data-power-detail ${showPowerDetails ? '' : 'hidden'}>
           <label for="power_adapter_voltage">Adapter Voltage</label>
           <input type="text" id="power_adapter_voltage" value="${escapeHtml(data.power_adapter_voltage || '')}" placeholder="e.g. 9V DC, 12V AC">
         </div>
-        <div class="form-group">
+        <div class="form-group power-adapter-detail" data-power-detail ${showPowerDetails ? '' : 'hidden'}>
           <label for="power_adapter_current">Adapter Current</label>
           <input type="text" id="power_adapter_current" value="${escapeHtml(data.power_adapter_current || '')}" placeholder="e.g. 500mA, 2A">
         </div>
-        <div class="form-group">
+        <div class="form-group power-adapter-detail" data-power-detail ${showPowerDetails ? '' : 'hidden'}>
           <label for="power_adapter_polarity">Adapter Polarity</label>
           <input type="text" id="power_adapter_polarity" value="${escapeHtml(data.power_adapter_polarity || '')}" placeholder="e.g. center negative">
         </div>
-        <div class="form-group full-width">
+        <div class="form-group full-width power-adapter-detail" data-power-detail ${showPowerDetails ? '' : 'hidden'}>
           <label for="power_adapter_notes">Power Notes</label>
           <input type="text" id="power_adapter_notes" value="${escapeHtml(data.power_adapter_notes || '')}" placeholder="e.g. OEM adapter model, barrel size, label wording">
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="purchase_date">Purchase Date</label>
           <input type="date" id="purchase_date" value="${escapeHtml(data.purchase_date)}">
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="purchase_price">Purchase Price ($)</label>
           <input type="number" id="purchase_price" min="0" step="0.01" value="${data.purchase_price || 0}">
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="warranty_end_date">Warranty Ends</label>
           <input type="date" id="warranty_end_date" value="${escapeHtml(data.warranty_end_date || '')}">
           <p class="text-muted-sm" style="margin-top:0.35rem">Leave blank if unknown or expired/not applicable.</p>
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="warranty_note">Warranty Note</label>
           <input type="text" id="warranty_note" value="${escapeHtml(data.warranty_note || '')}" placeholder="e.g. Sweetwater 2-year, manufacturer 1-year">
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="parent_item_id">Parent Item (accessory of)</label>
           <select id="parent_item_id">
             <option value="">None — top-level gear</option>
@@ -157,42 +171,42 @@ export function renderItemForm(item, meta) {
           </select>
           <p class="text-muted-sm" style="margin-top:0.35rem">Link cases, cables, extra mics, etc. to the main piece of gear.</p>
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="replacement_value">Replacement Value ($)</label>
           <div style="display:flex;gap:0.5rem;align-items:stretch">
             <input type="number" id="replacement_value" min="0" step="0.01" value="${data.replacement_value || 0}" style="flex:1">
             <button type="button" class="btn btn-accent btn-sm" id="form-auto-estimate" style="min-height:var(--touch-min)">Auto-Estimate</button>
           </div>
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label for="depreciated_value">Depreciated Value ($)</label>
           <input type="number" id="depreciated_value" min="0" step="0.01" value="${data.depreciated_value || 0}">
           <p class="text-muted-sm" style="margin-top:0.35rem">Tax or insurance depreciation — separate from replacement cost.</p>
         </div>
-        <div class="form-group full-width">
+        <div class="form-group full-width form-mode-full-only">
           <label for="replacement_value_note">Replacement Value Note</label>
           <input type="text" id="replacement_value_note" value="${escapeHtml(data.replacement_value_note)}" placeholder="Source or estimation method (e.g. Reverb avg June 2026)">
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label>Insurance Policy</label>
           <label class="toggle-label">
             <input type="checkbox" id="on_insurance_policy" ${onPolicy ? 'checked' : ''}>
             <span>Listed on insurance policy</span>
           </label>
         </div>
-        <div class="form-group full-width">
+        <div class="form-group full-width form-mode-full-only">
           <label for="insurance_policy_note">Insurance Policy Note</label>
           <input type="text" id="insurance_policy_note" value="${escapeHtml(data.insurance_policy_note || '')}" placeholder="e.g. Rider B item 14, scheduled 2025-03">
         </div>
-        <div class="form-group full-width">
+        <div class="form-group full-width form-mode-full-only">
           <label for="condition_notes">Condition Notes</label>
           <input type="text" id="condition_notes" value="${escapeHtml(data.condition_notes)}">
         </div>
-        <div class="form-group full-width">
+        <div class="form-group full-width form-mode-full-only">
           <label for="description">Description / Notes</label>
           <textarea id="description">${escapeHtml(data.description)}</textarea>
         </div>
-        <div class="form-group">
+        <div class="form-group form-mode-full-only">
           <label>Driver/Software Update Checks</label>
           <label class="toggle-label">
             <input type="checkbox" id="update_checks_enabled" ${checksOn ? 'checked' : ''}>
@@ -200,7 +214,7 @@ export function renderItemForm(item, meta) {
           </label>
           <p class="text-muted-sm" style="margin-top:0.35rem">Disable for end-of-life or unsupported gear.</p>
         </div>
-        <div class="form-group full-width">
+        <div class="form-group full-width form-mode-full-only">
           <label>Tags</label>
           <div class="tag-input-wrap" id="tag-container">
             ${tagNames.map(t => `<span class="tag-chip" data-tag="${escapeHtml(t)}">${escapeHtml(t)} <button type="button" data-remove-tag>&times;</button></span>`).join('')}
@@ -215,7 +229,7 @@ export function renderItemForm(item, meta) {
       </div>
 
       ${!isEdit ? `
-      <div class="card wall-cutout-form-note" style="margin-top:1.5rem">
+      <div class="form-section wall-cutout-form-note form-mode-full-only">
         <h3 class="section-title" style="margin-top:0">Wall cutout (optional)</h3>
         <p class="text-muted-sm" style="margin:0">
           After saving, you can add a life-size photo cutout for hanging on your virtual studio wall.

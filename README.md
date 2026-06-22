@@ -72,7 +72,8 @@ Pre-built packages are on the **[Releases](https://github.com/TerkWerX/STUDIO-IN
 
 | Platform | Download | How to run |
 |----------|----------|------------|
-| **Windows** | `Studio-Inventory-v…-Windows.zip` | Extract → double-click **Studio Inventory.exe** (or **Install Studio Inventory.exe** for Desktop/Start Menu shortcuts) |
+| **Windows** | `Studio-Inventory-v…-Windows-Setup.exe` | Double-click the setup file → choose shortcuts → install like a normal Windows app |
+| **Windows portable** | `Studio-Inventory-v…-Windows.zip` | Extract → double-click **Studio Inventory.exe**; useful for testing without installing |
 | **macOS** | `Studio-Inventory-v…-macOS.zip` or `.dmg` | Extract / open DMG → double-click **Start Studio Inventory.command** (or **Install Studio Inventory.command** to copy to Applications) |
 
 These bundles include the Node runtime and production dependencies — your friends do **not** need to install Node.js or run `npm install`.

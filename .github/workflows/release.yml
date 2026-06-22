@@ -24,6 +24,9 @@ jobs:
       - name: Package Windows release
         run: node scripts/package-release.js win dist/studio-inventory-win
 
+      - name: Create Windows setup installer
+        run: node scripts/build-windows-setup.js dist/studio-inventory-win dist/Studio-Inventory-${{ github.event.release.tag_name }}-Windows-Setup.exe
+
       - name: Create ZIP
         shell: pwsh
         run: |
@@ -32,7 +35,9 @@ jobs:
       - name: Upload Windows asset
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Studio-Inventory-${{ github.event.release.tag_name }}-Windows.zip
+          files: |
+            dist/Studio-Inventory-${{ github.event.release.tag_name }}-Windows-Setup.exe
+            dist/Studio-Inventory-${{ github.event.release.tag_name }}-Windows.zip
 
   build-mac:
     runs-on: macos-latest

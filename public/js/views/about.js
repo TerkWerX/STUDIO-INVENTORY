@@ -112,9 +112,11 @@ export function renderAbout() {
   `;
 }
 
-export function renderBackup(guest = {}) {
+export function renderBackup(guest = {}, ownerAuth = {}) {
   const guestOn = !!guest.guestEnabled;
   const guestUrl = guest.guestUrl || '';
+  const pinSet = !!ownerAuth.ownerPinSet;
+  const isLocal = ownerAuth.local !== false;
   return `
     <h2 class="page-title">Backup &amp; Restore</h2>
     <p class="page-subtitle">Protect your inventory data</p>
@@ -136,6 +138,19 @@ export function renderBackup(guest = {}) {
       <p class="text-muted-sm guest-url-hint">Anyone with this URL can view inventory while guest access is enabled. Disable when not needed.</p>
     </div>
 
+    <div class="card">
+      <h3 class="section-title">Owner Access on Wi-Fi</h3>
+      <p class="text-muted-sm" style="margin-bottom:1rem">
+        Localhost access on this studio computer stays unlocked. Browser sessions from other devices on the same Wi-Fi require an owner PIN before they can edit inventory, backups, manuals, or wall placements.
+      </p>
+      <div class="btn-group">
+        <button type="button" class="btn btn-secondary" id="owner-pin-set" ${isLocal ? '' : 'disabled'}>${pinSet ? 'Change Owner PIN' : 'Set Owner PIN'}</button>
+      </div>
+      <p class="text-muted-sm" style="margin-top:0.75rem">
+        Status: ${pinSet ? 'Owner PIN set for remote admin access.' : 'Remote owner access is locked until a PIN is set on this computer.'}
+      </p>
+    </div>
+
     <div class="card" style="border-left:4px solid var(--warning)">
       <h3 class="section-title">⚠ Backup Reminder</h3>
       <p style="color:var(--text-secondary)">
@@ -146,12 +161,25 @@ export function renderBackup(guest = {}) {
 
     <div class="card">
       <h3 class="section-title">Export Data</h3>
-      <p style="color:var(--text-secondary);margin-bottom:1rem">Download a complete copy of your inventory.</p>
+      <p style="color:var(--text-secondary);margin-bottom:1rem">Download a complete ZIP backup, or export lighter report formats.</p>
       <div class="btn-group">
+        <button type="button" class="btn btn-primary" id="backup-export-full">Full Backup ZIP</button>
         <button type="button" class="btn btn-primary" id="backup-export-json">Export JSON</button>
         <button type="button" class="btn btn-secondary" id="backup-export-sql">Export SQL Dump</button>
         <button type="button" class="btn btn-secondary" id="backup-export-csv">Export CSV</button>
       </div>
+    </div>
+
+    <div class="card">
+      <h3 class="section-title">Restore Full Backup</h3>
+      <p style="color:var(--text-secondary);margin-bottom:1rem">
+        Restore a Full Backup ZIP created by Studio Inventory. This replaces the database tables and managed upload folders with the backup contents.
+      </p>
+      <label class="btn btn-secondary" style="cursor:pointer">
+        Choose Backup ZIP
+        <input type="file" id="import-full-backup-file" accept=".zip,application/zip,application/x-zip-compressed" hidden>
+      </label>
+      <p id="import-full-backup-status" style="margin-top:1rem;color:var(--text-muted)"></p>
     </div>
 
     <div class="card">
@@ -165,6 +193,8 @@ export function renderBackup(guest = {}) {
         <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">category</code>,
         <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">location</code>,
         <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">replacement_value</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">requires_power</code>,
+        <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">power_adapter_voltage</code>,
         <code style="background:var(--bg-tertiary);padding:0.15rem 0.4rem;border-radius:4px">tags</code> (semicolon-separated), and more.
       </p>
       <label class="btn btn-primary" style="cursor:pointer;margin-bottom:1rem">
@@ -197,7 +227,7 @@ export function renderBackup(guest = {}) {
       <p style="color:var(--text-secondary)">
         The SQLite database file is stored at <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">data/inventory.db</code>.
         Uploaded photos and manuals are in <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">data/uploads/</code>.
-        You can copy these folders directly for a full backup.
+        The Full Backup ZIP includes inventory tables, wall/studio placements, manuals, photos, receipts, software assets, and the manual inbox.
       </p>
     </div>
   `;

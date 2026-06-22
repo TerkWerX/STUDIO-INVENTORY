@@ -8,6 +8,8 @@ export function renderItemForm(item, meta) {
     replacement_value: 0, replacement_value_note: '', depreciated_value: 0,
     on_insurance_policy: false, insurance_policy_note: '', parent_item_id: null,
     condition: 'Good', condition_notes: '', location: '', description: '', quantity: 1,
+    requires_power: false, power_adapter_voltage: '', power_adapter_current: '',
+    power_adapter_polarity: '', power_adapter_notes: '',
     update_checks_enabled: true, warranty_end_date: '', warranty_note: '',
     studio_status: 'in_studio', studio_status_note: '', tags: []
   };
@@ -22,6 +24,17 @@ export function renderItemForm(item, meta) {
 
     <form id="item-form" class="card">
       <input type="hidden" id="item-id" value="${data.id || ''}">
+
+      <div class="form-section label-scan-section" style="margin-bottom:1.25rem">
+        <div class="card-header">
+          <h3 class="section-title">Gear Label Scan</h3>
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+            Scan Label<input type="file" id="label-scan-file" accept="image/*" capture="environment" hidden>
+          </label>
+        </div>
+        <p class="text-muted-sm" style="margin-bottom:0.75rem">Photograph the manufacturer label or serial plate. Suggested brand, model, serial, and power data can be applied after review.</p>
+        <div id="label-scan-status" class="text-muted-sm"></div>
+      </div>
 
       <div class="form-grid">
         <div class="form-group">
@@ -91,6 +104,29 @@ export function renderItemForm(item, meta) {
         <div class="form-group">
           <label for="quantity">Quantity</label>
           <input type="number" id="quantity" min="1" max="9999" value="${data.quantity || 1}">
+        </div>
+        <div class="form-group">
+          <label>Power Adapter</label>
+          <label class="toggle-label">
+            <input type="checkbox" id="requires_power" ${data.requires_power === true || data.requires_power === 1 ? 'checked' : ''}>
+            <span>Requires power adapter or power cable</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="power_adapter_voltage">Adapter Voltage</label>
+          <input type="text" id="power_adapter_voltage" value="${escapeHtml(data.power_adapter_voltage || '')}" placeholder="e.g. 9V DC, 12V AC">
+        </div>
+        <div class="form-group">
+          <label for="power_adapter_current">Adapter Current</label>
+          <input type="text" id="power_adapter_current" value="${escapeHtml(data.power_adapter_current || '')}" placeholder="e.g. 500mA, 2A">
+        </div>
+        <div class="form-group">
+          <label for="power_adapter_polarity">Adapter Polarity</label>
+          <input type="text" id="power_adapter_polarity" value="${escapeHtml(data.power_adapter_polarity || '')}" placeholder="e.g. center negative">
+        </div>
+        <div class="form-group full-width">
+          <label for="power_adapter_notes">Power Notes</label>
+          <input type="text" id="power_adapter_notes" value="${escapeHtml(data.power_adapter_notes || '')}" placeholder="e.g. OEM adapter model, barrel size, label wording">
         </div>
         <div class="form-group">
           <label for="purchase_date">Purchase Date</label>
@@ -223,6 +259,11 @@ export function collectFormData() {
     insurance_policy_note: document.getElementById('insurance_policy_note').value,
     condition_notes: document.getElementById('condition_notes').value,
     description: document.getElementById('description').value,
+    requires_power: document.getElementById('requires_power').checked,
+    power_adapter_voltage: document.getElementById('power_adapter_voltage').value,
+    power_adapter_current: document.getElementById('power_adapter_current').value,
+    power_adapter_polarity: document.getElementById('power_adapter_polarity').value,
+    power_adapter_notes: document.getElementById('power_adapter_notes').value,
     update_checks_enabled: document.getElementById('update_checks_enabled').checked,
     tags
   };

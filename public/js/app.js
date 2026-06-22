@@ -54,6 +54,7 @@ const state = {
   floorplanId: null,
   studioBrowseFpId: null,
   studioBrowseHighlightItemId: null,
+  ownerAuth: null,
 
   floorplans: [],
   softwareFilters: { q: '', category: '', sort: 'name' },
@@ -64,7 +65,7 @@ const state = {
 const container = document.getElementById('view-container');
 let stopCameraScan = null;
 
-const APP_ASSET_VER = '2.5.19-manualinbox1';
+const APP_ASSET_VER = '2.5.22-labelscan1';
 
 async function ensureFreshAssets() {
   if (localStorage.getItem('app-asset-ver') === APP_ASSET_VER) return false;
@@ -104,6 +105,7 @@ async function init() {
     if (await ensureFreshAssets()) return;
     const health = await api.health();
     updateSidebarVersion(health);
+    if (!(await ensureOwnerAccess())) return;
     state.meta = await api.meta();
     showBackupBanner();
     checkForAppUpdate();
@@ -139,6 +141,63 @@ async function init() {
         <p>Start the server with <code>npm start</code> from the project folder, then refresh.</p>
         <p style="margin-top:1rem;color:var(--danger)">${err.message}</p>
       </div>`;
+  }
+}
+
+async function ensureOwnerAccess() {
+  state.ownerAuth = await api.authStatus();
+  const localUrl = `http://localhost:${location.port || '3847'}/`;
+  if (!state.ownerAuth || typeof state.ownerAuth.local !== 'boolean') {
+    container.innerHTML = `
+      <div class="empty-state">
+        <h3>Studio Inventory Needs Restart</h3>
+        <p>The browser loaded newer app files, but the running server does not have the matching owner-access API yet.</p>
+        <p>Restart Studio Inventory, then open <a href="${localUrl}">${localUrl}</a>.</p>
+      </div>`;
+    return false;
+  }
+  if (state.ownerAuth.local || state.ownerAuth.authenticated) return true;
+
+  if (!state.ownerAuth.ownerPinSet) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <h3>Open Studio Inventory Locally</h3>
+        <p>Remote editing is locked until an owner PIN is set from the studio computer.</p>
+        <p>If this is the studio computer, open <a href="${localUrl}">${localUrl}</a>, then go to Backup &amp; Restore and set an owner PIN.</p>
+      </div>`;
+    return false;
+  }
+
+  const pin = await showModal({
+    title: 'Owner PIN Required',
+    message: 'Enter the owner PIN to edit Studio Inventory from this device.',
+    confirmText: 'Unlock',
+    cancelText: 'Cancel',
+    prompt: true,
+    promptType: 'password',
+    promptPlaceholder: 'Owner PIN'
+  });
+  if (!pin) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <h3>Studio Inventory Locked</h3>
+        <p>Refresh and enter the owner PIN to continue.</p>
+      </div>`;
+    return false;
+  }
+
+  try {
+    await api.ownerLogin(pin);
+    state.ownerAuth = await api.authStatus();
+    return true;
+  } catch (err) {
+    api.setOwnerToken('');
+    container.innerHTML = `
+      <div class="empty-state">
+        <h3>Could Not Unlock</h3>
+        <p style="color:var(--danger)">${err.message}</p>
+      </div>`;
+    return false;
   }
 }
 
@@ -464,8 +523,9 @@ async function navigate(view, params = {}) {
         break;
 
       case 'backup': {
-        const guestSettings = await api.guestSettings();
-        container.innerHTML = renderBackup(guestSettings);
+        const [guestSettings, ownerAuth] = await Promise.all([api.guestSettings(), api.authStatus()]);
+        state.ownerAuth = ownerAuth;
+        container.innerHTML = renderBackup(guestSettings, ownerAuth);
         bindBackupEvents();
         break;
       }
@@ -928,6 +988,7 @@ function bindDetailEvents(item) {
 function bindFormEvents() {
   const tagContainer = document.getElementById('tag-container');
   const tagInput = document.getElementById('tag-input');
+  bindLabelScanEvents();
 
   function addTag(name) {
     const n = name.trim();
@@ -1014,6 +1075,75 @@ function bindFormEvents() {
   container.querySelector('[data-nav="inventory"]')?.addEventListener('click', () => navigate('inventory'));
   bindAutoEstimate();
   bindBrandSuggest(state.brands || state.meta?.brands || []);
+}
+
+function labelScanSummary(scan) {
+  const s = scan?.suggestions || {};
+  const rows = [
+    ['Brand', s.brand],
+    ['Model', s.model],
+    ['Serial', s.serial_number],
+    ['Voltage', s.power_adapter_voltage],
+    ['Current', s.power_adapter_current],
+    ['Polarity', s.power_adapter_polarity],
+    ['Power notes', s.power_adapter_notes]
+  ].filter(([, value]) => value);
+  if (!rows.length) return 'No structured fields found. Try a sharper close-up with the label filling the frame.';
+  return rows.map(([label, value]) => `${label}: ${value}`).join('\n');
+}
+
+function applyLabelScanSuggestions(suggestions, mode = 'blank') {
+  const applyText = (id, value) => {
+    const el = document.getElementById(id);
+    if (!el || value == null || String(value).trim() === '') return;
+    if (mode === 'overwrite' || !String(el.value || '').trim()) el.value = value;
+  };
+  applyText('brand', suggestions.brand);
+  applyText('model', suggestions.model);
+  applyText('serial_number', suggestions.serial_number);
+  applyText('power_adapter_voltage', suggestions.power_adapter_voltage);
+  applyText('power_adapter_current', suggestions.power_adapter_current);
+  applyText('power_adapter_polarity', suggestions.power_adapter_polarity);
+  applyText('power_adapter_notes', suggestions.power_adapter_notes);
+  const requiresPower = document.getElementById('requires_power');
+  if (requiresPower && suggestions.requires_power) requiresPower.checked = true;
+  document.getElementById('brand')?.dispatchEvent(new Event('change'));
+}
+
+function bindLabelScanEvents() {
+  const input = document.getElementById('label-scan-file');
+  const status = document.getElementById('label-scan-status');
+  input?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      if (status) status.textContent = 'Reading label text...';
+      const scan = await api.scanLabel(file);
+      const summary = labelScanSummary(scan);
+      if (status) {
+        status.textContent = `OCR confidence ${scan.confidence || 0}%\n${summary}`;
+        status.style.whiteSpace = 'pre-wrap';
+      }
+      const choice = await showChoiceModal({
+        title: 'Apply Label Scan?',
+        message: summary,
+        choices: [
+          { id: 'blank', label: 'Fill Blank Fields', primary: true },
+          { id: 'overwrite', label: 'Overwrite Fields' },
+          { id: 'cancel', label: 'Skip' }
+        ]
+      });
+      if (choice === 'blank' || choice === 'overwrite') {
+        applyLabelScanSuggestions(scan.suggestions || {}, choice);
+        showToast('Label scan suggestions applied', 'success');
+      }
+    } catch (err) {
+      if (status) status.textContent = `Error: ${err.message}`;
+      showToast(err.message, 'error');
+    } finally {
+      e.target.value = '';
+    }
+  });
 }
 
 function bindManualEvents(manuals, items = []) {
@@ -2315,6 +2445,32 @@ function bindBackupEvents() {
 
   setGuestSectionState(guestEnabledCheck?.checked);
 
+  document.getElementById('owner-pin-set')?.addEventListener('click', async () => {
+    const pin = await showModal({
+      title: state.ownerAuth?.ownerPinSet ? 'Change Owner PIN' : 'Set Owner PIN',
+      message: 'Use at least 4 characters. Remote browsers on your Wi-Fi will need this before they can edit Studio Inventory.',
+      confirmText: 'Save PIN',
+      prompt: true,
+      promptType: 'password',
+      promptPlaceholder: 'Owner PIN'
+    });
+    if (!pin) return;
+    try {
+      await api.setupOwnerPin(pin);
+      state.ownerAuth = await api.authStatus();
+      showToast('Owner PIN saved', 'success');
+      navigate('backup');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-export-full')?.addEventListener('click', () => {
+    api.exportFullBackup();
+    localStorage.setItem('lastBackup', String(Date.now()));
+    showToast('Full backup exported', 'success');
+  });
+
   document.getElementById('backup-export-json')?.addEventListener('click', () => {
     api.exportJson();
     localStorage.setItem('lastBackup', String(Date.now()));
@@ -2329,9 +2485,9 @@ function bindBackupEvents() {
 
   document.getElementById('download-csv-template')?.addEventListener('click', () => {
     const template = [
-      'name,brand,model,serial_number,category,location,condition,replacement_value,depreciated_value,purchase_price,purchase_date,warranty_end_date,on_insurance_policy,tags',
-      'Shure SM57,Shure,SM57,SN12345,Microphone,Main Rack,Good,99,89,2024-01-15,,vocal;dynamic',
-      'Boss DD-500,Boss,DD-500,,Pedal,Pedalboard,Excellent,399,349,,,delay'
+      'name,brand,model,serial_number,category,location,condition,replacement_value,depreciated_value,purchase_price,purchase_date,warranty_end_date,on_insurance_policy,requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,tags',
+      'Shure SM57,Shure,SM57,SN12345,Microphone,Main Rack,Good,99,89,2024-01-15,,,0,0,,,,vocal;dynamic',
+      'Boss DD-500,Boss,DD-500,,Pedal,Pedalboard,Excellent,399,349,,,,0,1,9V DC,500mA,center negative,delay'
     ].join('\n');
     const blob = new Blob([template], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -2351,6 +2507,33 @@ function bindBackupEvents() {
       status.textContent = `Imported ${result.imported} item(s)${result.skipped ? `, ${result.skipped} row(s) skipped` : ''}.`;
       showToast(`Imported ${result.imported} items from CSV`, 'success');
       navigate('inventory');
+    } catch (err) {
+      status.textContent = `Error: ${err.message}`;
+      showToast(err.message, 'error');
+    }
+    e.target.value = '';
+  });
+
+  document.getElementById('import-full-backup-file')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const status = document.getElementById('import-full-backup-status');
+    const ok = await showModal({
+      title: 'Restore Full Backup?',
+      message: 'This replaces the current inventory database tables and managed upload folders with the backup contents. Continue?',
+      confirmText: 'Restore Backup',
+      danger: true
+    });
+    if (!ok) {
+      e.target.value = '';
+      return;
+    }
+    try {
+      status.textContent = 'Restoring backup...';
+      const result = await api.importFullBackup(file);
+      status.textContent = `Restored ${result.tables || 0} table(s), ${result.files || 0} file(s), and ${result.items || 0} item(s).`;
+      showToast('Full backup restored', 'success');
+      navigate('dashboard');
     } catch (err) {
       status.textContent = `Error: ${err.message}`;
       showToast(err.message, 'error');

@@ -4,6 +4,8 @@ const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const AdmZip = require('adm-zip');
+const Tesseract = require('tesseract.js');
 const {
   db, DB_PATH, DATA_DIR, UPLOADS_DIR, initSchema,
   enrichItem, setItemTags, sanitizeItemInput, getTagsForItem, itemUploadDir,
@@ -24,7 +26,10 @@ const {
 const { parseLookupCode } = require('./lib/lookup-code');
 const { summarizeCompleteness, computeItemCompleteness } = require('./lib/completeness');
 const { parseCsv, mapRowToItem } = require('./lib/csv-import');
-const { readSettings, writeSettings, regenerateGuestToken, isValidGuestToken } = require('./lib/studio-settings');
+const {
+  readSettings, writeSettings, regenerateGuestToken, isValidGuestToken,
+  setOwnerPin, verifyOwnerPin, rotateOwnerSessionToken, ownerPinConfigured
+} = require('./lib/studio-settings');
 const { indexManualAttachment, searchManuals, pdfParseAvailable } = require('./lib/pdf-index');
 const { fetchBrandLogoFromWeb, fetchAllInventoryBrandLogos } = require('./lib/fetch-brand-logo');
 const { getCurrentVersion, checkForUpdate } = require('./lib/version');
@@ -35,10 +40,13 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const MAX_MANUAL_DOWNLOAD_SIZE = 50 * 1024 * 1024;
 const FLOORPLANS_DIR = path.join(UPLOADS_DIR, 'floorplans');
 const MANUAL_INBOX_DIR = path.join(DATA_DIR, 'manual-inbox');
+const OCR_DATA_DIR = path.join(__dirname, 'ocr');
+const OCR_CACHE_DIR = path.join(DATA_DIR, 'ocr-cache');
 
 initSchema();
 if (!fs.existsSync(FLOORPLANS_DIR)) fs.mkdirSync(FLOORPLANS_DIR, { recursive: true });
 if (!fs.existsSync(MANUAL_INBOX_DIR)) fs.mkdirSync(MANUAL_INBOX_DIR, { recursive: true });
+if (!fs.existsSync(OCR_CACHE_DIR)) fs.mkdirSync(OCR_CACHE_DIR, { recursive: true });
 
 const softwareScreenshotUpload = multer({
   storage: multer.diskStorage({
@@ -185,6 +193,19 @@ const logoUpload = multer({
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith('image/')) cb(null, true);
     else cb(new Error('Logo must be an image (PNG, SVG, WebP)'));
+  }
+});
+
+const backupUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1024 * 1024 * 1024 }
+});
+
+const labelScanUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.mimetype.startsWith('image/'));
   }
 });
 
@@ -500,6 +521,124 @@ function extractManualLinksFromHtml(pageUrl, html) {
   return candidates;
 }
 
+const COMMON_GEAR_BRANDS = [
+  'Alesis', 'Akai', 'Allen & Heath', 'Ampeg', 'Arturia', 'Audient', 'Behringer',
+  'Boss', 'Casio', 'Crown', 'Denon', 'Digidesign', 'Elektron', 'Emu', 'Fender',
+  'Focusrite', 'Fostex', 'Fractal Audio', 'Hammond', 'Ibanez', 'IK Multimedia',
+  'Kemper', 'Korg', 'Line 6', 'Mackie', 'M-Audio', 'Moog', 'Native Instruments',
+  'Nord', 'Novation', 'Peavey', 'Pioneer', 'PreSonus', 'QSC', 'Roland', 'RME',
+  'Sennheiser', 'Shure', 'Solid State Logic', 'Steinberg', 'Tascam', 'TC Electronic',
+  'Universal Audio', 'Waldorf', 'Yamaha', 'Zoom'
+];
+
+function normalizedOcrLines(text) {
+  return String(text || '')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+function knownBrandNames() {
+  const fromDb = db.prepare(`
+    SELECT DISTINCT brand as name FROM items WHERE brand IS NOT NULL AND brand != ''
+    UNION
+    SELECT name FROM brands WHERE name IS NOT NULL AND name != ''
+  `).all().map(r => r.name);
+  return [...new Set([...fromDb, ...COMMON_GEAR_BRANDS].map(String).filter(Boolean))]
+    .sort((a, b) => b.length - a.length);
+}
+
+function findKnownBrand(lines) {
+  const text = ` ${lines.join(' ')} `.toLowerCase();
+  return knownBrandNames().find(brand => {
+    const escaped = String(brand).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(text);
+  }) || '';
+}
+
+function cleanLabelValue(value) {
+  return String(value || '')
+    .replace(/^[#:\-.\s]+/, '')
+    .replace(/[|]+/g, 'I')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, 150);
+}
+
+function firstMatch(lines, patterns) {
+  for (const line of lines) {
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (match?.[1]) return { value: cleanLabelValue(match[1]), line };
+    }
+  }
+  return { value: '', line: '' };
+}
+
+function parsePowerInfo(lines) {
+  const powerLines = lines.filter(line =>
+    /\b(input|output|power|adapter|adaptor|dc in|ac in|rating|rated)\b/i.test(line)
+    || /\b\d+(?:\.\d+)?\s*(v|vdc|vac|a|ma)\b/i.test(line)
+  );
+  const source = powerLines.length ? powerLines : lines;
+  const voltageMatch = firstMatch(source, [
+    /\b(?:(?:dc\s*)?in(?:put)?[:\s-]*)?(\d+(?:\.\d+)?\s*(?:vdc|v\s*dc|v|vac|v\s*ac))(?:\b|[^a-z])/i,
+    /\b((?:ac|dc)\s*\d+(?:\.\d+)?\s*v)\b/i
+  ]);
+  const currentMatch = firstMatch(source, [
+    /\b(\d+(?:\.\d+)?\s*(?:ma|mA|a|A))(?:\b|[^a-z])/,
+    /\bcurrent[:\s-]*(\d+(?:\.\d+)?\s*(?:ma|mA|a|A))/i
+  ]);
+  const polarityLine = source.find(line => /center|centre|tip|polarity|negative|positive/i.test(line)) || '';
+  let polarity = '';
+  if (/center|centre|tip/i.test(polarityLine) && /neg/i.test(polarityLine)) polarity = 'center negative';
+  else if (/center|centre|tip/i.test(polarityLine) && /pos/i.test(polarityLine)) polarity = 'center positive';
+  else if (/negative/i.test(polarityLine)) polarity = 'negative';
+  else if (/positive/i.test(polarityLine)) polarity = 'positive';
+
+  const voltage = cleanLabelValue(voltageMatch.value || (voltageMatch.line.match(/(\d+(?:\.\d+)?\s*(?:vdc|v\s*dc|v|vac|v\s*ac))/i)?.[1] || ''));
+  const current = cleanLabelValue(currentMatch.value);
+  return {
+    requires_power: !!(voltage || current || powerLines.length),
+    power_adapter_voltage: voltage.toUpperCase().replace(/\s+/g, ' '),
+    power_adapter_current: current.replace(/\s+/g, ' '),
+    power_adapter_polarity: polarity,
+    power_adapter_notes: powerLines.slice(0, 4).join(' | ')
+  };
+}
+
+function parseLabelScanText(text) {
+  const lines = normalizedOcrLines(text);
+  const serial = firstMatch(lines, [
+    /\b(?:s\/?n|serial(?:\s*(?:no\.?|number|#))?|ser\.?\s*no\.?)[:\s#-]*([a-z0-9][a-z0-9\-/.]{3,})\b/i,
+    /\bSN[:\s#-]*([a-z0-9][a-z0-9\-/.]{3,})\b/i
+  ]);
+  const model = firstMatch(lines, [
+    /\b(?:model|mod\.?|m\/n|type)[:\s#-]*([a-z0-9][a-z0-9\-/. ]{1,40})\b/i,
+    /\b(?:product|device)[:\s#-]*([a-z0-9][a-z0-9\-/. ]{2,40})\b/i
+  ]);
+  const suggestions = {
+    brand: findKnownBrand(lines),
+    model: model.value.replace(/\b(serial|s\/?n|input|output|rating)\b.*$/i, '').trim(),
+    serial_number: serial.value,
+    ...parsePowerInfo(lines)
+  };
+  if (suggestions.model && suggestions.serial_number && suggestions.model === suggestions.serial_number) {
+    suggestions.model = '';
+  }
+  return {
+    rawText: text,
+    lines,
+    suggestions,
+    matchedLines: {
+      model: model.line,
+      serial_number: serial.line,
+      power: suggestions.power_adapter_notes
+    }
+  };
+}
+
 // --- API ---
 
 function requestBaseUrl(req) {
@@ -513,13 +652,116 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     version: getCurrentVersion(),
     itemCount: db.prepare('SELECT COUNT(*) as c FROM items').get().c,
-    dbPath: DB_PATH
+    dbPath: DB_PATH,
+    appRoot: __dirname.replace(/\\/g, '/')
   });
 });
 
 app.get('/api/update-check', async (_req, res) => {
   res.json(await checkForUpdate());
 });
+
+function isLocalRequest(req) {
+  const addr = req.socket?.remoteAddress || req.ip || '';
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(addr);
+}
+
+function parseCookies(header = '') {
+  return Object.fromEntries(String(header).split(';').map(part => {
+    const idx = part.indexOf('=');
+    if (idx === -1) return null;
+    const key = part.slice(0, idx).trim();
+    const rawValue = part.slice(idx + 1).trim();
+    try {
+      return [key, decodeURIComponent(rawValue)];
+    } catch {
+      return [key, rawValue];
+    }
+  }).filter(Boolean));
+}
+
+function ownerTokenFromRequest(req) {
+  return req.get('x-studio-owner-token')
+    || req.query.owner_token
+    || parseCookies(req.get('cookie')).studio_owner_token
+    || '';
+}
+
+function isValidOwnerToken(token) {
+  const s = readSettings();
+  if (!s.ownerSessionToken || !token) return false;
+  const actual = Buffer.from(String(s.ownerSessionToken));
+  const expected = Buffer.from(String(token));
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function sendOwnerCookie(res, token) {
+  res.setHeader('Set-Cookie', `studio_owner_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}`);
+}
+
+app.get('/api/auth/status', (req, res) => {
+  const local = isLocalRequest(req);
+  const pinSet = ownerPinConfigured();
+  res.json({
+    local,
+    ownerPinSet: pinSet,
+    remoteProtected: !local,
+    authenticated: local || isValidOwnerToken(ownerTokenFromRequest(req))
+  });
+});
+
+app.post('/api/auth/setup', (req, res) => {
+  if (!isLocalRequest(req)) {
+    return res.status(403).json({ error: 'Owner PIN setup must be done on the studio computer.' });
+  }
+  try {
+    const s = setOwnerPin(req.body?.pin);
+    sendOwnerCookie(res, s.ownerSessionToken);
+    res.json({ ok: true, ownerPinSet: true, token: s.ownerSessionToken });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Could not set owner PIN' });
+  }
+});
+
+app.post('/api/auth/login', (req, res) => {
+  if (!ownerPinConfigured()) {
+    return res.status(403).json({ error: 'Open Studio Inventory on the studio computer first and set an owner PIN.' });
+  }
+  if (!verifyOwnerPin(req.body?.pin)) {
+    return res.status(401).json({ error: 'Incorrect owner PIN' });
+  }
+  const s = rotateOwnerSessionToken();
+  sendOwnerCookie(res, s.ownerSessionToken);
+  res.json({ ok: true, token: s.ownerSessionToken });
+});
+
+app.post('/api/auth/logout', (_req, res) => {
+  rotateOwnerSessionToken();
+  res.setHeader('Set-Cookie', 'studio_owner_token=; Path=/; SameSite=Lax; Max-Age=0');
+  res.json({ ok: true });
+});
+
+function ownerMiddleware(req, res, next) {
+  if (req.path.startsWith('/guest/')) return next();
+  if (req.path.startsWith('/public/')) return next();
+  if (req.path.startsWith('/auth/')) return next();
+  if (req.path === '/health' || req.path === '/update-check') return next();
+  if (isLocalRequest(req)) return next();
+  if (!ownerPinConfigured()) {
+    return res.status(403).json({
+      error: 'Remote owner access is locked until an owner PIN is set on the studio computer.',
+      ownerAuthRequired: true,
+      setupRequired: true
+    });
+  }
+  if (isValidOwnerToken(ownerTokenFromRequest(req))) return next();
+  return res.status(401).json({
+    error: 'Owner PIN required for remote Studio Inventory access.',
+    ownerAuthRequired: true
+  });
+}
+
+app.use('/api', ownerMiddleware);
 
 app.get('/api/stats', (_req, res) => {
   const totals = db.prepare(`
@@ -628,6 +870,12 @@ app.get('/api/guest/:token/stats', guestMiddleware, (_req, res) => {
   res.json({ totals, readOnly: true });
 });
 
+app.get('/api/public/items/:id', (req, res) => {
+  const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  res.json(enrichItem(item));
+});
+
 function lookupItemByCode(code) {
   const parsed = parseLookupCode(code);
   if (!parsed) return { error: 'empty' };
@@ -660,6 +908,30 @@ app.get('/api/lookup', (req, res) => {
   if (result.error === 'empty') return res.status(400).json({ error: 'Code required' });
   if (result.error === 'not_found') return res.status(404).json({ error: 'No matching item' });
   res.json(result);
+});
+
+app.post('/api/label-scan', labelScanUpload.single('image'), async (req, res) => {
+  if (!req.file?.buffer) return res.status(400).json({ error: 'Label photo required' });
+  try {
+    const options = { logger: () => {}, cachePath: OCR_CACHE_DIR };
+    if (fs.existsSync(path.join(OCR_DATA_DIR, 'eng.traineddata'))) {
+      options.langPath = OCR_DATA_DIR;
+      options.gzip = false;
+    }
+    const result = await Tesseract.recognize(req.file.buffer, 'eng', options);
+    const text = result?.data?.text || '';
+    const parsed = parseLabelScanText(text);
+    res.json({
+      ok: true,
+      confidence: Math.round(result?.data?.confidence || 0),
+      ...parsed
+    });
+  } catch (err) {
+    console.error('Label scan failed:', err);
+    res.status(500).json({
+      error: 'Could not read text from that label photo. Try a closer, sharper photo with the label filling the frame.'
+    });
+  }
 });
 
 app.get('/api/studio/map', (_req, res) => {
@@ -1084,13 +1356,15 @@ app.post('/api/items', (req, res) => {
       purchase_date,purchase_price,replacement_value,replacement_value_note,
       condition,condition_notes,location,description,quantity,update_checks_enabled,
       warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
-      parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note)
+      parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
+      requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes)
     VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
       @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
       @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
       @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
       CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END,
-      @parent_item_id,@depreciated_value,@on_insurance_policy,@insurance_policy_note)
+      @parent_item_id,@depreciated_value,@on_insurance_policy,@insurance_policy_note,
+      @requires_power,@power_adapter_voltage,@power_adapter_current,@power_adapter_polarity,@power_adapter_notes)
   `).run(data);
   setItemTags(result.lastInsertRowid, req.body.tags || []);
   if (data.brand) queueBrandLogoFetch(data.brand);
@@ -1115,6 +1389,9 @@ app.put('/api/items/:id', (req, res) => {
       studio_status=@studio_status,studio_status_note=@studio_status_note,
       parent_item_id=@parent_item_id,depreciated_value=@depreciated_value,
       on_insurance_policy=@on_insurance_policy,insurance_policy_note=@insurance_policy_note,
+      requires_power=@requires_power,power_adapter_voltage=@power_adapter_voltage,
+      power_adapter_current=@power_adapter_current,power_adapter_polarity=@power_adapter_polarity,
+      power_adapter_notes=@power_adapter_notes,
       value_updated_at=CASE WHEN @value_changed = 1 AND @replacement_value > 0
         THEN datetime('now') ELSE value_updated_at END,
       updated_at=datetime('now') WHERE id=@id
@@ -1224,13 +1501,15 @@ app.post('/api/import/csv', express.text({ type: ['text/csv', 'text/plain', 'app
         purchase_date,purchase_price,replacement_value,replacement_value_note,
         condition,condition_notes,location,description,quantity,update_checks_enabled,
         warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
-        parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note)
+        parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
+        requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes)
       VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
         @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
         @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
         @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
         CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END,
-        @parent_item_id,@depreciated_value,@on_insurance_policy,@insurance_policy_note)
+        @parent_item_id,@depreciated_value,@on_insurance_policy,@insurance_policy_note,
+        @requires_power,@power_adapter_voltage,@power_adapter_current,@power_adapter_polarity,@power_adapter_notes)
     `);
 
     let imported = 0;
@@ -1532,6 +1811,135 @@ app.get('/api/documents', (_req, res) => {
   `).all());
 });
 
+const BACKUP_TABLES = [
+  'items',
+  'tags',
+  'item_tags',
+  'attachments',
+  'brands',
+  'maintenance_log',
+  'loan_log',
+  'racks',
+  'rack_items',
+  'signal_chains',
+  'signal_chain_items',
+  'floorplans',
+  'floorplan_items',
+  'software_licenses'
+];
+
+const BACKUP_DELETE_ORDER = [
+  'manual_fts',
+  'floorplan_items',
+  'signal_chain_items',
+  'rack_items',
+  'item_tags',
+  'attachments',
+  'maintenance_log',
+  'loan_log',
+  'software_licenses',
+  'floorplans',
+  'signal_chains',
+  'racks',
+  'brands',
+  'tags',
+  'items'
+];
+
+function tableColumns(table) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+}
+
+function exportBackupData() {
+  const settings = readSettings();
+  const safeSettings = {
+    guestEnabled: !!settings.guestEnabled,
+    guestToken: settings.guestToken || ''
+  };
+  return {
+    manifest: {
+      app: 'Studio Inventory',
+      format: 'studio-inventory-full-backup',
+      version: 1,
+      appVersion: getCurrentVersion(),
+      exportedAt: new Date().toISOString()
+    },
+    settings: safeSettings,
+    tables: Object.fromEntries(BACKUP_TABLES.map(table => [
+      table,
+      db.prepare(`SELECT * FROM ${table}`).all()
+    ]))
+  };
+}
+
+function addFolderToZip(zip, dir, archiveRoot) {
+  if (fs.existsSync(dir)) {
+    zip.addLocalFolder(dir, archiveRoot);
+  }
+}
+
+function safeExtractEntry(entry, baseDir, prefix) {
+  if (entry.isDirectory) return false;
+  const entryName = entry.entryName.replace(/\\/g, '/');
+  if (!entryName.startsWith(`${prefix}/`)) return false;
+  const rel = entryName.slice(prefix.length + 1);
+  if (!rel || rel.split('/').some(part => part === '..')) return false;
+  const dest = path.resolve(baseDir, rel);
+  const base = path.resolve(baseDir);
+  if (!dest.startsWith(base + path.sep) && dest !== base) return false;
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, entry.getData());
+  return true;
+}
+
+function insertBackupRows(table, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+  const cols = tableColumns(table).filter(col => rows.some(row => Object.prototype.hasOwnProperty.call(row, col)));
+  if (!cols.length) return 0;
+  const sql = `INSERT INTO ${table} (${cols.join(',')}) VALUES (${cols.map(c => `@${c}`).join(',')})`;
+  const stmt = db.prepare(sql);
+  let count = 0;
+  for (const row of rows) {
+    const data = {};
+    for (const col of cols) data[col] = row[col] ?? null;
+    stmt.run(data);
+    count++;
+  }
+  return count;
+}
+
+async function reindexRestoredManuals() {
+  db.prepare('DELETE FROM manual_fts').run();
+  const manuals = db.prepare(`
+    SELECT a.*, i.name as item_name FROM attachments a
+    JOIN items i ON i.id = a.item_id
+    WHERE a.type IN ('manual','document')
+  `).all();
+  let indexed = 0;
+  for (const att of manuals) {
+    const fp = path.join(UPLOADS_DIR, att.relative_path || att.filename);
+    if (!fs.existsSync(fp)) continue;
+    try {
+      await indexManualAttachment(att, att.item_name);
+      indexed++;
+    } catch (err) {
+      console.warn('Manual reindex skipped:', att.original_name, err.message);
+    }
+  }
+  return indexed;
+}
+
+app.get('/api/export/full', (_req, res) => {
+  const zip = new AdmZip();
+  zip.addFile('backup.json', Buffer.from(JSON.stringify(exportBackupData(), null, 2), 'utf8'));
+  addFolderToZip(zip, UPLOADS_DIR, 'uploads');
+  addFolderToZip(zip, MANUAL_INBOX_DIR, 'manual-inbox');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="studio-inventory-full-backup-${stamp}.zip"`);
+  res.send(zip.toBuffer());
+});
+
 app.get('/api/export/json', (_req, res) => {
   const data = {
     exported_at: new Date().toISOString(),
@@ -1546,7 +1954,7 @@ app.get('/api/export/json', (_req, res) => {
 });
 
 app.get('/api/export/sql', (_req, res) => {
-  const tables = ['items', 'tags', 'item_tags', 'attachments', 'brands', 'software_licenses'];
+  const tables = BACKUP_TABLES;
   let sql = `-- Studio Inventory SQL Dump\n-- ${new Date().toISOString()}\n\nPRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\n\n`;
   for (const table of tables) {
     const rows = db.prepare(`SELECT * FROM ${table}`).all();
@@ -1575,7 +1983,8 @@ app.get('/api/export/csv', (req, res) => {
   const items = db.prepare(`SELECT * FROM items ${where} ORDER BY ${orderBy}`).all(values);
   const headers = ['id','name','common_name','category','brand','model','serial_number','year',
     'purchase_date','purchase_price','replacement_value','replacement_value_note','condition',
-    'condition_notes','location','description','quantity','update_checks_enabled','tags'];
+    'condition_notes','location','description','quantity','requires_power','power_adapter_voltage',
+    'power_adapter_current','power_adapter_polarity','power_adapter_notes','update_checks_enabled','tags'];
   const esc = (v) => {
     const s = String(v ?? '');
     return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
@@ -1608,10 +2017,12 @@ app.post('/api/import/json', (req, res) => {
       const insert = db.prepare(`
         INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
           purchase_date,purchase_price,replacement_value,replacement_value_note,
-          condition,condition_notes,location,description,quantity,update_checks_enabled)
+          condition,condition_notes,location,description,quantity,update_checks_enabled,
+          requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes)
         VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
           @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
-          @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled)
+          @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
+          @requires_power,@power_adapter_voltage,@power_adapter_current,@power_adapter_polarity,@power_adapter_notes)
       `);
       let n = 0;
       for (const raw of items) {
@@ -1625,6 +2036,66 @@ app.post('/api/import/json', (req, res) => {
     res.json({ ok: true, imported: count });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => {
+  if (!req.file?.buffer) return res.status(400).json({ error: 'Choose a Studio Inventory backup ZIP' });
+  try {
+    const zip = new AdmZip(req.file.buffer);
+    const backupEntry = zip.getEntry('backup.json');
+    if (!backupEntry) return res.status(400).json({ error: 'Backup ZIP is missing backup.json' });
+
+    const backup = JSON.parse(backupEntry.getData().toString('utf8'));
+    if (backup?.manifest?.format !== 'studio-inventory-full-backup' || !backup.tables) {
+      return res.status(400).json({ error: 'This is not a Studio Inventory full backup ZIP' });
+    }
+
+    let restoredRows = 0;
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        for (const table of BACKUP_DELETE_ORDER) {
+          db.prepare(`DELETE FROM ${table}`).run();
+        }
+        for (const table of BACKUP_TABLES) {
+          restoredRows += insertBackupRows(table, backup.tables[table] || []);
+        }
+      })();
+    } finally {
+      db.pragma('foreign_keys = ON');
+    }
+
+    fs.rmSync(UPLOADS_DIR, { recursive: true, force: true });
+    fs.rmSync(MANUAL_INBOX_DIR, { recursive: true, force: true });
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    fs.mkdirSync(MANUAL_INBOX_DIR, { recursive: true });
+
+    let restoredFiles = 0;
+    for (const entry of zip.getEntries()) {
+      if (safeExtractEntry(entry, UPLOADS_DIR, 'uploads')) restoredFiles++;
+      if (safeExtractEntry(entry, MANUAL_INBOX_DIR, 'manual-inbox')) restoredFiles++;
+    }
+
+    if (backup.settings) {
+      writeSettings({
+        guestEnabled: !!backup.settings.guestEnabled,
+        guestToken: backup.settings.guestToken || readSettings().guestToken
+      });
+    }
+
+    const indexedManuals = await reindexRestoredManuals();
+    const itemCount = db.prepare('SELECT COUNT(*) as c FROM items').get().c;
+    res.json({
+      ok: true,
+      tables: BACKUP_TABLES.length,
+      rows: restoredRows,
+      files: restoredFiles,
+      items: itemCount,
+      indexedManuals
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not restore backup ZIP' });
   }
 });
 

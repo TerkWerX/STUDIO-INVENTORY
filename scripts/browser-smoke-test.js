@@ -206,13 +206,19 @@ async function main() {
 
     await navTo(page, 'backup', '#guest-enabled');
     assert(await page.locator('#guest-url').count() === 1, 'guest URL input missing');
+    assert(await page.locator('#backup-export-full').count() === 1, 'full backup export button missing');
+    assert(await page.locator('#import-full-backup-file').count() === 1, 'full backup restore input missing');
+    assert(await page.locator('#owner-pin-set').count() === 1, 'owner PIN control missing');
     console.log('✓ backup / guest settings');
 
     await navTo(page, 'item-form', '#item-form');
     assert(await page.locator('#depreciated_value').count() === 1, 'depreciated field missing on form');
     assert(await page.locator('#parent_item_id').count() === 1, 'parent item field missing');
     assert(await page.locator('#on_insurance_policy').count() === 1, 'insurance flag missing');
-    console.log('✓ item form (v1.5 fields)');
+    assert(await page.locator('#label-scan-file').count() === 1, 'label scan input missing');
+    assert(await page.locator('#requires_power').count() === 1, 'requires power field missing');
+    assert(await page.locator('#power_adapter_voltage').count() === 1, 'adapter voltage field missing');
+    console.log('✓ item form extended fields');
 
     const stats = await page.evaluate(async () => {
       const r = await fetch('/api/stats');

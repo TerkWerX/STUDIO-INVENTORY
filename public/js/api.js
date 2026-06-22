@@ -1,10 +1,37 @@
 const API = '/api';
+const OWNER_TOKEN_KEY = 'studio-owner-token';
+
+function ownerToken() {
+  return localStorage.getItem(OWNER_TOKEN_KEY) || '';
+}
+
+function setOwnerToken(token) {
+  if (token) localStorage.setItem(OWNER_TOKEN_KEY, token);
+  else localStorage.removeItem(OWNER_TOKEN_KEY);
+}
+
+function withOwnerHeaders(options = {}) {
+  const token = ownerToken();
+  if (!token) return options;
+  const headers = new Headers(options.headers || {});
+  headers.set('X-Studio-Owner-Token', token);
+  return { ...options, headers };
+}
+
+function downloadUrl(path) {
+  const token = ownerToken();
+  if (!token) return `${API}${path}`;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${API}${path}${sep}owner_token=${encodeURIComponent(token)}`;
+}
 
 async function request(path, options = {}) {
-  const res = await fetch(`${API}${path}`, options);
+  const res = await fetch(`${API}${path}`, withOwnerHeaders(options));
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `Request failed (${res.status})`);
+    const out = new Error(err.error || `Request failed (${res.status})`);
+    Object.assign(out, err, { status: res.status });
+    throw out;
   }
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
@@ -12,7 +39,28 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  ownerToken,
+  setOwnerToken,
   health: () => request('/health'),
+  authStatus: () => request('/auth/status'),
+  setupOwnerPin: async (pin) => {
+    const result = await request('/auth/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin })
+    });
+    setOwnerToken(result.token);
+    return result;
+  },
+  ownerLogin: async (pin) => {
+    const result = await request('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin })
+    });
+    setOwnerToken(result.token);
+    return result;
+  },
   updateCheck: () => request('/update-check'),
   stats: () => request('/stats'),
   meta: () => request('/meta'),
@@ -87,11 +135,17 @@ export const api = {
     body: JSON.stringify({ filename })
   }),
   documents: () => request('/documents'),
-  exportJson: () => window.open('/api/export/json', '_blank'),
-  exportSql: () => window.open('/api/export/sql', '_blank'),
+  exportFullBackup: () => window.open(downloadUrl('/export/full'), '_blank'),
+  exportJson: () => window.open(downloadUrl('/export/json'), '_blank'),
+  exportSql: () => window.open(downloadUrl('/export/sql'), '_blank'),
   exportCsv: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
-    window.open(`/api/export/csv${qs ? '?' + qs : ''}`, '_blank');
+    window.open(downloadUrl(`/export/csv${qs ? '?' + qs : ''}`), '_blank');
+  },
+  importFullBackup: (file) => {
+    const fd = new FormData();
+    fd.append('backup', file);
+    return request('/import/full', { method: 'POST', body: fd });
   },
   importJson: (data, replace = false) => request('/import/json', {
     method: 'POST',
@@ -136,6 +190,11 @@ export const api = {
   searchManuals: (q) => request(`/manuals/search?q=${encodeURIComponent(q)}`),
   reindexManuals: () => request('/manuals/reindex', { method: 'POST' }),
   lookup: (code) => request(`/lookup?code=${encodeURIComponent(code)}`),
+  scanLabel: (file) => {
+    const fd = new FormData();
+    fd.append('image', file);
+    return request('/label-scan', { method: 'POST', body: fd });
+  },
   floorplans: async () => {
     const data = await request('/floorplans');
     if (!Array.isArray(data)) {

@@ -4,6 +4,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const AdmZip = require('adm-zip');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = process.env.SMOKE_PORT || 3850;
@@ -65,12 +66,19 @@ async function main() {
         replacement_value: 99,
         depreciated_value: 60,
         on_insurance_policy: true,
-        insurance_policy_note: 'Rider A'
+        insurance_policy_note: 'Rider A',
+        requires_power: true,
+        power_adapter_voltage: '48V phantom',
+        power_adapter_current: '',
+        power_adapter_polarity: '',
+        power_adapter_notes: 'Condenser test path'
       })
     });
     assert(created.depreciated_value === 60, 'depreciated_value not saved');
     assert(created.on_insurance_policy === true, 'on_insurance_policy not saved');
-    console.log('✓ item create with v1.5 fields');
+    assert(created.requires_power === true, 'requires_power not saved');
+    assert(created.power_adapter_voltage === '48V phantom', 'power_adapter_voltage not saved');
+    console.log('✓ item create with extended fields');
 
     const parent = await api(base, '/items', {
       method: 'POST',
@@ -301,6 +309,29 @@ async function main() {
     const cal = fps2.find(p => p.id === fp.id);
     assert(cal?.wall_photos?.['0']?.calibrated === true, 'wall calibration not saved');
     console.log('✓ floorplans v2 + loan wall hide + wall align');
+
+    const backupRes = await fetch(`${base}/export/full`);
+    assert(backupRes.ok, 'full backup export failed');
+    const backupBuffer = Buffer.from(await backupRes.arrayBuffer());
+    const backupZip = new AdmZip(backupBuffer);
+    const backupJsonEntry = backupZip.getEntry('backup.json');
+    assert(backupJsonEntry, 'full backup missing backup.json');
+    const backupJson = JSON.parse(backupJsonEntry.getData().toString('utf8'));
+    assert(backupJson.tables.floorplans.some(row => row.id === fp.id), 'full backup missing floorplan row');
+    assert(backupJson.tables.floorplan_items.length >= 1, 'full backup missing wall placements');
+    assert(backupZip.getEntries().some(e => e.entryName.startsWith('uploads/floorplans/walls/')), 'full backup missing wall photo files');
+
+    const restoreForm = new FormData();
+    restoreForm.append('backup', new Blob([backupBuffer], { type: 'application/zip' }), 'studio-backup.zip');
+    const restoreRes = await fetch(`${base}/import/full`, { method: 'POST', body: restoreForm });
+    const restoreJson = await restoreRes.json().catch(() => ({}));
+    if (!restoreRes.ok) throw new Error(`full backup restore failed: ${restoreJson.error || restoreRes.statusText}`);
+    assert(restoreJson.files >= 1, 'full backup restore did not restore files');
+    const restoredFloorplans = await api(base, '/floorplans');
+    const restoredCal = restoredFloorplans.find(p => p.id === fp.id);
+    assert(restoredCal?.wall_photos?.['0']?.calibrated === true, 'full backup restore lost wall calibration');
+    assert(restoredCal?.items?.length >= 1, 'full backup restore lost wall placements');
+    console.log('✓ full backup export / restore');
 
     const sw = await api(base, '/software', {
       method: 'POST',

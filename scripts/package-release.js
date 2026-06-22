@@ -10,6 +10,7 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const platform = (process.argv[2] || '').toLowerCase();
 const outRoot = path.resolve(process.argv[3] || path.join(ROOT, 'dist', `studio-inventory-${platform}`));
+const APP_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 if (!['win', 'mac'].includes(platform)) {
   console.error('Usage: node scripts/package-release.js <win|mac> [outputDir]');
@@ -28,6 +29,7 @@ const COPY = [
   'start-studio-inventory.bat',
   'start-studio-inventory.sh',
   'lib',
+  'ocr',
   'public',
   'installers',
 ];
@@ -58,6 +60,7 @@ function ensureDataDirs() {
   const dirs = [
     'manual-inbox',
     'backups',
+    'ocr-cache',
     'uploads',
     path.join('uploads', 'photos'),
     path.join('uploads', 'manuals'),
@@ -110,10 +113,14 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 class StudioInventoryLauncher {
+  const string AppName = "Studio Inventory";
+  const string AppVersion = "${APP_VERSION}";
   const string AppUrl = "http://localhost:3847/";
   const string HealthUrl = "http://127.0.0.1:3847/api/health";
 
@@ -126,7 +133,12 @@ class StudioInventoryLauncher {
   }
 
   static int RunStart(string root) {
-    if (!ServerIsRunning()) {
+    string runningRoot = RunningAppRoot();
+    if (runningRoot != null) {
+      if (!SameRoot(root, runningRoot)) {
+        return Error("Another Studio Inventory server is already running from:\\n\\n" + runningRoot + "\\n\\nClose that copy before starting this one.");
+      }
+    } else {
       string node = Path.Combine(root, ".runtime", "node.exe");
       string server = Path.Combine(root, "server.js");
       if (!File.Exists(node)) return Error("Missing bundled runtime: " + node);
@@ -144,9 +156,13 @@ class StudioInventoryLauncher {
         return Error("Could not start Studio Inventory.\\n\\n" + ex.Message);
       }
 
-      for (int i = 0; i < 40 && !ServerIsRunning(); i++) Thread.Sleep(250);
-      if (!ServerIsRunning()) {
+      for (int i = 0; i < 40 && RunningAppRoot() == null; i++) Thread.Sleep(250);
+      runningRoot = RunningAppRoot();
+      if (runningRoot == null) {
         return Error("Studio Inventory was launched, but the server did not respond at " + AppUrl + "\\n\\nClose any old Studio Inventory windows and try again.");
+      }
+      if (!SameRoot(root, runningRoot)) {
+        return Error("Port 3847 is responding from a different Studio Inventory folder:\\n\\n" + runningRoot);
       }
     }
 
@@ -196,6 +212,9 @@ class StudioInventoryLauncher {
         }
       }
 
+      WriteUninstaller(target);
+      RegisterUninstaller(target);
+
       if (!noShortcuts) CreateShortcuts(target);
 
       if (silent) return 0;
@@ -229,6 +248,54 @@ class StudioInventoryLauncher {
     }
   }
 
+  static void WriteUninstaller(string target) {
+    string uninstallPath = Path.Combine(target, "Uninstall Studio Inventory.cmd");
+    string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+    string startMenu = Path.Combine(
+      Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+      "Microsoft", "Windows", "Start Menu", "Programs", "Studio Inventory");
+    string content =
+      "@echo off\\r\\n" +
+      "setlocal\\r\\n" +
+      "set \\\"APPDIR=" + target.Replace("\\\"", "\\\"\\\"") + "\\\"\\r\\n" +
+      "set \\\"DESKTOP=" + desktop.Replace("\\\"", "\\\"\\\"") + "\\\"\\r\\n" +
+      "set \\\"STARTMENU=" + startMenu.Replace("\\\"", "\\\"\\\"") + "\\\"\\r\\n" +
+      "echo Uninstall Studio Inventory\\r\\n" +
+      "echo.\\r\\n" +
+      "choice /C YN /M \\\"Remove your inventory data too\\\"\\r\\n" +
+      "set \\\"REMOVE_DATA=%ERRORLEVEL%\\\"\\r\\n" +
+      "powershell -NoProfile -ExecutionPolicy Bypass -Command \\\"Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ($env:APPDIR + '*') } | Stop-Process -Force\\\" >nul 2>nul\\r\\n" +
+      "reg delete \\\"HKCU\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\Studio Inventory\\\" /f >nul 2>nul\\r\\n" +
+      "del \\\"%DESKTOP%\\\\Studio Inventory.lnk\\\" >nul 2>nul\\r\\n" +
+      "rmdir /s /q \\\"%STARTMENU%\\\" >nul 2>nul\\r\\n" +
+      "if \\\"%REMOVE_DATA%\\\"==\\\"1\\\" (\\r\\n" +
+      "  cd /d \\\"%TEMP%\\\"\\r\\n" +
+      "  start \\\"\\\" cmd /c \\\"timeout /t 1 >nul ^& rmdir /s /q \\\"\\\"%APPDIR%\\\"\\\"\\\"\\r\\n" +
+      ") else (\\r\\n" +
+      "  powershell -NoProfile -ExecutionPolicy Bypass -Command \\\"Get-ChildItem -LiteralPath $env:APPDIR -Force | Where-Object { $_.Name -ne 'data' } | Remove-Item -Recurse -Force\\\"\\r\\n" +
+      ")\\r\\n" +
+      "echo.\\r\\n" +
+      "echo Studio Inventory was uninstalled.\\r\\n" +
+      "timeout /t 2 >nul\\r\\n";
+    File.WriteAllText(uninstallPath, content, Encoding.UTF8);
+  }
+
+  static void RegisterUninstaller(string target) {
+    string uninstallPath = Path.Combine(target, "Uninstall Studio Inventory.cmd");
+    using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Studio Inventory")) {
+      if (key == null) return;
+      key.SetValue("DisplayName", AppName);
+      key.SetValue("DisplayVersion", AppVersion);
+      key.SetValue("Publisher", "TerkWerX");
+      key.SetValue("InstallLocation", target);
+      key.SetValue("DisplayIcon", Path.Combine(target, "Studio Inventory.exe"));
+      key.SetValue("UninstallString", "\\\"" + uninstallPath + "\\\"");
+      key.SetValue("QuietUninstallString", "cmd.exe /c \\\"" + uninstallPath + "\\\"");
+      key.SetValue("NoModify", 1, RegistryValueKind.DWord);
+      key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+    }
+  }
+
   static void CreateShortcuts(string target) {
     string exe = Path.Combine(target, "Studio Inventory.exe");
     if (!File.Exists(exe)) exe = Path.Combine(target, "Start Studio Inventory.bat");
@@ -240,9 +307,10 @@ class StudioInventoryLauncher {
 
     string startMenu = Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-      "Microsoft", "Windows", "Start Menu", "Programs");
+      "Microsoft", "Windows", "Start Menu", "Programs", "Studio Inventory");
     Directory.CreateDirectory(startMenu);
     CreateShortcut(Path.Combine(startMenu, "Studio Inventory.lnk"), exe, target);
+    CreateShortcut(Path.Combine(startMenu, "Uninstall Studio Inventory.lnk"), Path.Combine(target, "Uninstall Studio Inventory.cmd"), target);
   }
 
   static void CreateShortcut(string linkPath, string targetPath, string workingDirectory) {
@@ -256,16 +324,35 @@ class StudioInventoryLauncher {
     shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
   }
 
-  static bool ServerIsRunning() {
+  static string RunningAppRoot() {
     try {
       HttpWebRequest req = (HttpWebRequest)WebRequest.Create(HealthUrl);
       req.Timeout = 500;
       using (HttpWebResponse res = (HttpWebResponse)req.GetResponse()) {
-        return (int)res.StatusCode >= 200 && (int)res.StatusCode < 500;
+        if ((int)res.StatusCode < 200 || (int)res.StatusCode >= 500) return null;
+        using (StreamReader reader = new StreamReader(res.GetResponseStream())) {
+          string body = reader.ReadToEnd();
+          string marker = "\\\"appRoot\\\":\\\"";
+          int start = body.IndexOf(marker, StringComparison.Ordinal);
+          if (start < 0) return "";
+          start += marker.Length;
+          int end = body.IndexOf("\\\"", start, StringComparison.Ordinal);
+          if (end <= start) return "";
+          return body.Substring(start, end - start).Replace("\\\\/", "/");
+        }
       }
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  static bool SameRoot(string expected, string running) {
+    if (String.IsNullOrWhiteSpace(running)) return false;
+    return String.Equals(NormalizeRoot(expected), NormalizeRoot(running), StringComparison.OrdinalIgnoreCase);
+  }
+
+  static string NormalizeRoot(string value) {
+    return Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Replace('\\\\', '/');
   }
 
   static string Quote(string value) {

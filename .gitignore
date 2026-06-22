@@ -13,6 +13,7 @@ data/uploads/*
 !data/uploads/.gitkeep
 data/manual-inbox/*
 data/backups/*
+data/ocr-cache/*
 !data/backups/.gitkeep
 data/.smoke-test/
 data/.api-smoke-test/

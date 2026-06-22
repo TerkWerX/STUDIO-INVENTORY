@@ -315,9 +315,14 @@ export function renderItemDetail(item) {
         <div class="detail-field"><div class="field-label">Location</div><div class="field-value">${escapeHtml(item.location)}</div></div>
         <div class="detail-field"><div class="field-label">Condition</div><div class="field-value"><span class="condition-badge condition-${item.condition}">${item.condition}</span></div></div>
         <div class="detail-field"><div class="field-label">Quantity</div><div class="field-value">${item.quantity}</div></div>
+        <div class="detail-field"><div class="field-label">Requires Power</div><div class="field-value">${item.requires_power ? 'Yes' : 'No'}</div></div>
+        <div class="detail-field"><div class="field-label">Adapter Voltage</div><div class="field-value">${escapeHtml(item.power_adapter_voltage || '') || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Adapter Current</div><div class="field-value">${escapeHtml(item.power_adapter_current || '') || '—'}</div></div>
+        <div class="detail-field"><div class="field-label">Adapter Polarity</div><div class="field-value">${escapeHtml(item.power_adapter_polarity || '') || '—'}</div></div>
         <div class="detail-field"><div class="field-label">Purchase Date</div><div class="field-value">${formatDate(item.purchase_date)}</div></div>
         <div class="detail-field"><div class="field-label">Update Checks</div><div class="field-value">${item.update_checks_enabled ? '<span class="status-on">Enabled</span>' : '<span class="status-off">Disabled</span>'}</div></div>
       </div>
+      ${item.power_adapter_notes ? `<div class="detail-field mt-1"><div class="field-label">Power Notes</div><div class="field-value field-value-sm">${escapeHtml(item.power_adapter_notes)}</div></div>` : ''}
       ${item.condition_notes ? `<div class="detail-field mt-1"><div class="field-label">Condition Notes</div><div class="field-value field-value-sm">${escapeHtml(item.condition_notes)}</div></div>` : ''}
       ${item.description ? `<div class="detail-field mt-1"><div class="field-label">Description</div><div class="field-value field-value-sm">${escapeHtml(item.description)}</div></div>` : ''}
       ${item.tags?.length ? `

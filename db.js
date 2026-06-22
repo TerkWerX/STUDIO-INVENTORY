@@ -81,6 +81,13 @@ function runMigrations() {
     db.exec('ALTER TABLE items ADD COLUMN wall_cutout_height_ft REAL DEFAULT 0');
     db.exec("ALTER TABLE items ADD COLUMN wall_cutout_calibration_json TEXT DEFAULT '{}'");
   }
+  if (!itemCols.includes('requires_power')) {
+    db.exec('ALTER TABLE items ADD COLUMN requires_power INTEGER NOT NULL DEFAULT 0');
+    db.exec("ALTER TABLE items ADD COLUMN power_adapter_voltage TEXT DEFAULT ''");
+    db.exec("ALTER TABLE items ADD COLUMN power_adapter_current TEXT DEFAULT ''");
+    db.exec("ALTER TABLE items ADD COLUMN power_adapter_polarity TEXT DEFAULT ''");
+    db.exec("ALTER TABLE items ADD COLUMN power_adapter_notes TEXT DEFAULT ''");
+  }
 
   const attCols2 = db.prepare('PRAGMA table_info(attachments)').all().map(c => c.name);
   if (!attCols2.includes('extracted_text')) {
@@ -305,6 +312,11 @@ function initSchema() {
       location TEXT DEFAULT '',
       description TEXT DEFAULT '',
       quantity INTEGER DEFAULT 1,
+      requires_power INTEGER NOT NULL DEFAULT 0,
+      power_adapter_voltage TEXT DEFAULT '',
+      power_adapter_current TEXT DEFAULT '',
+      power_adapter_polarity TEXT DEFAULT '',
+      power_adapter_notes TEXT DEFAULT '',
       update_checks_enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
@@ -462,6 +474,7 @@ function enrichItem(item) {
     ...item,
     brand_logo_path,
     update_checks_enabled: item.update_checks_enabled !== 0,
+    requires_power: item.requires_power !== 0,
     tags: getTagsForItem(item.id),
     attachments,
     photos: attachments.filter(a => a.type === 'photo'),
@@ -478,6 +491,7 @@ function enrichItem(item) {
         ...child,
         on_insurance_policy: child.on_insurance_policy !== 0,
         update_checks_enabled: child.update_checks_enabled !== 0,
+        requires_power: child.requires_power !== 0,
         photos: att.filter(a => a.type === 'photo'),
         tags: getTagsForItem(child.id)
       };
@@ -552,7 +566,12 @@ function sanitizeItemInput(body) {
     parent_item_id: parentId && !isNaN(parentId) ? parentId : null,
     depreciated_value: num(body.depreciated_value),
     on_insurance_policy: body.on_insurance_policy === true || body.on_insurance_policy === 1 || body.on_insurance_policy === '1' ? 1 : 0,
-    insurance_policy_note: str(body.insurance_policy_note, 500)
+    insurance_policy_note: str(body.insurance_policy_note, 500),
+    requires_power: body.requires_power === true || body.requires_power === 1 || body.requires_power === '1' ? 1 : 0,
+    power_adapter_voltage: str(body.power_adapter_voltage, 100),
+    power_adapter_current: str(body.power_adapter_current, 100),
+    power_adapter_polarity: str(body.power_adapter_polarity, 150),
+    power_adapter_notes: str(body.power_adapter_notes, 1000)
   };
 }
 

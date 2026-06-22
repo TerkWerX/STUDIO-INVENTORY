@@ -4,7 +4,7 @@ const root = document.getElementById('scan-root');
 const itemId = new URLSearchParams(window.location.search).get('id');
 
 async function loadItem(id) {
-  const res = await fetch(`/api/items/${encodeURIComponent(id)}`);
+  const res = await fetch(`/api/public/items/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(res.status === 404 ? 'Item not found' : 'Could not load item');
   return res.json();
 }
@@ -42,10 +42,12 @@ function renderItem(item) {
           <div><dt>Category</dt><dd>${escapeHtml(item.category)}</dd></div>
           <div><dt>Condition</dt><dd><span class="condition-badge condition-${item.condition}">${item.condition}</span></dd></div>
           <div><dt>Replacement</dt><dd class="value-cell">${formatCurrency(item.replacement_value * (item.quantity || 1))}</dd></div>
+          ${item.requires_power ? `<div><dt>Power</dt><dd>${escapeHtml([item.power_adapter_voltage, item.power_adapter_current, item.power_adapter_polarity].filter(Boolean).join(' · ') || 'Required')}</dd></div>` : ''}
           ${item.purchase_date ? `<div><dt>Purchased</dt><dd>${formatDate(item.purchase_date)}</dd></div>` : ''}
         </dl>
 
         ${item.description ? `<p class="scan-desc">${escapeHtml(item.description)}</p>` : ''}
+        ${item.power_adapter_notes ? `<p class="scan-desc"><strong>Power notes:</strong> ${escapeHtml(item.power_adapter_notes)}</p>` : ''}
 
         <div class="scan-actions">
           <a class="btn btn-primary scan-btn" href="${detailUrl}">Full Details</a>

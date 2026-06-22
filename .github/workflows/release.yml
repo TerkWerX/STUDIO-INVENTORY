@@ -27,6 +27,50 @@ jobs:
       - name: Create Windows setup installer
         run: node scripts/build-windows-setup.js dist/studio-inventory-win dist/Studio-Inventory-${{ github.event.release.tag_name }}-Windows-Setup.exe
 
+      - name: Smoke test Windows setup installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:RUNNER_TEMP 'studio-inventory-install-test'
+          $setup = "dist/Studio-Inventory-${{ github.event.release.tag_name }}-Windows-Setup.exe"
+          if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Recurse -Force
+          }
+
+          Start-Process -FilePath $setup -ArgumentList @('--silent', '--no-start', '--no-shortcuts', '--target', $target) -Wait -NoNewWindow
+
+          $node = Join-Path $target '.runtime\node.exe'
+          $serverJs = Join-Path $target 'server.js'
+          $launcher = Join-Path $target 'Studio Inventory.exe'
+          $uninstaller = Join-Path $target 'Uninstall Studio Inventory.cmd'
+          if (!(Test-Path -LiteralPath $node)) { throw "Bundled node.exe missing after install" }
+          if (!(Test-Path -LiteralPath $serverJs)) { throw "server.js missing after install" }
+          if (!(Test-Path -LiteralPath $launcher)) { throw "Launcher EXE missing after install" }
+          if (!(Test-Path -LiteralPath $uninstaller)) { throw "Uninstaller missing after install" }
+
+          $env:PORT = '3891'
+          $env:STUDIO_DATA_DIR = Join-Path $target 'data'
+          $proc = Start-Process -FilePath $node -ArgumentList 'server.js' -WorkingDirectory $target -WindowStyle Hidden -PassThru
+          try {
+            $health = $null
+            for ($i = 0; $i -lt 40; $i++) {
+              try {
+                $health = Invoke-RestMethod -Uri 'http://127.0.0.1:3891/api/health' -TimeoutSec 1
+                if ($health.ok) { break }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (!$health -or !$health.ok) { throw "Installed app health check failed" }
+            if (!$health.appRoot -or ($health.appRoot -notlike ($target.Replace('\','/') + '*'))) {
+              throw "Installed app health returned unexpected appRoot: $($health.appRoot)"
+            }
+          } finally {
+            if ($proc -and !$proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force
+            }
+          }
+
       - name: Create ZIP
         shell: pwsh
         run: |

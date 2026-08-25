@@ -4,6 +4,7 @@ set -euo pipefail
 SOURCE="$(cd "$(dirname "$0")/../.." && pwd)"
 TARGET="${STUDIO_INVENTORY_INSTALL_DIR:-$HOME/.local/share/studio-inventory}"
 NO_START=0
+NO_SHORTCUTS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -17,6 +18,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-start)
       NO_START=1
+      shift
+      ;;
+    --no-shortcuts)
+      NO_SHORTCUTS=1
       shift
       ;;
     *)
@@ -66,11 +71,12 @@ fi
 chmod +x "$TARGET/.runtime/node" "$TARGET/Start Studio Inventory.sh" \
   "$TARGET/Install Studio Inventory.sh" "$TARGET/start-studio-inventory.sh"
 
-mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
-ln -sfn "$TARGET/Start Studio Inventory.sh" "$HOME/.local/bin/studio-inventory"
+if [[ "$NO_SHORTCUTS" -eq 0 ]]; then
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+  ln -sfn "$TARGET/Start Studio Inventory.sh" "$HOME/.local/bin/studio-inventory"
 
-DESKTOP_FILE="$HOME/.local/share/applications/studio-inventory.desktop"
-cat > "$DESKTOP_FILE" <<EOF
+  DESKTOP_FILE="$HOME/.local/share/applications/studio-inventory.desktop"
+  cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Studio Inventory
@@ -80,10 +86,11 @@ Icon=$TARGET/public/icons/icon.svg
 Terminal=true
 Categories=AudioVideo;Utility;
 EOF
-chmod +x "$DESKTOP_FILE"
+  chmod +x "$DESKTOP_FILE"
 
-if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+  fi
 fi
 
 echo

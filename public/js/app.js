@@ -2598,9 +2598,9 @@ function bindBackupEvents() {
       const replace = document.getElementById('import-replace').checked;
       if (replace) {
         const ok = await showModal({
-          title: 'Replace All Data?',
-          message: 'This will delete all existing items and replace them with the import. Continue?',
-          confirmText: 'Replace All',
+          title: 'Replace Inventory Catalog?',
+          message: 'This replaces inventory catalog records with the JSON import. Use a Full Backup ZIP when you also need to restore media and studio layouts. Continue?',
+          confirmText: 'Replace Catalog',
           danger: true
         });
         if (!ok) return;

@@ -232,10 +232,10 @@ Your database and uploads are **local only** and excluded from git. Back them up
 
 ### Full backup
 
-1. **Backup** page → Export JSON + SQL dump
-2. Copy the entire `data/uploads/` folder
-3. Copy `data/manual-inbox/` if you have unimported downloaded manuals waiting there
-4. Or copy the whole `data/` directory
+1. Open **Backup & Restore** → **Full Backup ZIP**.
+2. Keep the ZIP somewhere outside the Studio Inventory data folder.
+3. Use **Restore Full Backup** to restore the database, managed uploads, and manual inbox together.
+4. JSON, SQL, and CSV are advanced catalog/data exports; they are not substitutes for a Full Backup ZIP when you need media and studio layouts.
 
 ---
 

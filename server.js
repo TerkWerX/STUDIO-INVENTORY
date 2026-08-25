@@ -196,8 +196,16 @@ const logoUpload = multer({
   }
 });
 
+const BACKUP_INCOMING_DIR = path.join(DATA_DIR, 'backups', '.incoming');
+if (!fs.existsSync(BACKUP_INCOMING_DIR)) fs.mkdirSync(BACKUP_INCOMING_DIR, { recursive: true });
+
 const backupUpload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, BACKUP_INCOMING_DIR),
+    filename: (_req, _file, cb) => {
+      cb(null, `restore-${Date.now()}-${crypto.randomBytes(8).toString('hex')}.zip`);
+    }
+  }),
   limits: { fileSize: 1024 * 1024 * 1024 }
 });
 
@@ -870,10 +878,47 @@ app.get('/api/guest/:token/stats', guestMiddleware, (_req, res) => {
   res.json({ totals, readOnly: true });
 });
 
+function publicItemView(item) {
+  const safeAttachment = (attachment) => ({
+    id: attachment.id,
+    original_name: attachment.original_name,
+    relative_path: attachment.relative_path,
+    mime_type: attachment.mime_type,
+    type: attachment.type,
+    version: attachment.version,
+    description: attachment.description
+  });
+  return {
+    id: item.id,
+    name: item.name,
+    common_name: item.common_name,
+    category: item.category,
+    brand: item.brand,
+    brand_logo_path: item.brand_logo_path,
+    model: item.model,
+    serial_number: item.serial_number,
+    year: item.year,
+    purchase_date: item.purchase_date,
+    replacement_value: item.replacement_value,
+    condition: item.condition,
+    location: item.location,
+    description: item.description,
+    quantity: item.quantity,
+    requires_power: item.requires_power,
+    power_adapter_voltage: item.power_adapter_voltage,
+    power_adapter_current: item.power_adapter_current,
+    power_adapter_polarity: item.power_adapter_polarity,
+    power_adapter_notes: item.power_adapter_notes,
+    photos: (item.photos || []).map(safeAttachment),
+    manuals: (item.manuals || []).map(safeAttachment),
+    software: (item.software || []).map(safeAttachment)
+  };
+}
+
 app.get('/api/public/items/:id', (req, res) => {
   const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
-  res.json(enrichItem(item));
+  res.json(publicItemView(enrichItem(item)));
 });
 
 function lookupItemByCode(code) {
@@ -1915,18 +1960,38 @@ async function reindexRestoredManuals() {
     JOIN items i ON i.id = a.item_id
     WHERE a.type IN ('manual','document')
   `).all();
+  let processed = 0;
   let indexed = 0;
   for (const att of manuals) {
     const fp = path.join(UPLOADS_DIR, att.relative_path || att.filename);
     if (!fs.existsSync(fp)) continue;
     try {
-      await indexManualAttachment(att, att.item_name);
-      indexed++;
+      const chars = await indexManualAttachment(db, att, att.item_name, UPLOADS_DIR);
+      processed++;
+      if (chars > 0) indexed++;
     } catch (err) {
       console.warn('Manual reindex skipped:', att.original_name, err.message);
     }
   }
-  return indexed;
+  return { processed, indexed };
+}
+
+function swapStagedDirectory(target, staged, rollback, state) {
+  if (fs.existsSync(target)) {
+    fs.renameSync(target, rollback);
+    state.oldMoved = true;
+  }
+  fs.renameSync(staged, target);
+  state.newMoved = true;
+}
+
+function rollbackDirectorySwap(target, rollback, state) {
+  if (state.newMoved && fs.existsSync(target)) {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+  if (state.oldMoved && fs.existsSync(rollback)) {
+    fs.renameSync(rollback, target);
+  }
 }
 
 app.get('/api/export/full', (_req, res) => {
@@ -1943,7 +2008,8 @@ app.get('/api/export/full', (_req, res) => {
 app.get('/api/export/json', (_req, res) => {
   const data = {
     exported_at: new Date().toISOString(),
-    version: '2.0',
+    version: '2.1',
+    scope: 'inventory-catalog',
     items: db.prepare('SELECT * FROM items ORDER BY name').all().map(enrichItem),
     software_licenses: db.prepare('SELECT * FROM software_licenses ORDER BY name').all(),
     tags: db.prepare('SELECT * FROM tags ORDER BY name').all(),
@@ -1999,56 +2065,221 @@ app.get('/api/export/csv', (req, res) => {
   res.send(csv);
 });
 
-app.post('/api/import/json', (req, res) => {
-  const { items, replace = false } = req.body;
-  if (!Array.isArray(items)) return res.status(400).json({ error: 'Invalid import data' });
+function existingUploadRelativePath(value) {
+  const rel = String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!rel || rel.split('/').some(part => part === '..')) return '';
+  const full = path.resolve(UPLOADS_DIR, rel);
+  const root = path.resolve(UPLOADS_DIR);
+  if (!full.startsWith(root + path.sep) || !fs.existsSync(full)) return '';
   try {
-    const count = db.transaction(() => {
+    if (!fs.statSync(full).isFile()) return '';
+  } catch {
+    return '';
+  }
+  return rel;
+}
+
+app.post('/api/import/json', async (req, res) => {
+  const { items, software_licenses: softwareLicenses, replace = false } = req.body;
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'Invalid import data' });
+  const hasSoftwareCatalog = Array.isArray(softwareLicenses);
+
+  try {
+    const result = db.transaction(() => {
       if (replace) {
-        const all = db.prepare('SELECT relative_path,filename FROM attachments').all();
-        for (const a of all) {
-          const fp = path.join(UPLOADS_DIR, a.relative_path || a.filename);
-          if (fs.existsSync(fp)) fs.unlinkSync(fp);
-        }
-        const ids = db.prepare('SELECT id FROM items').all();
-        for (const { id } of ids) removeItemUploadDirs(id);
-        db.exec('DELETE FROM attachments;DELETE FROM item_tags;DELETE FROM tags;DELETE FROM items;');
+        db.prepare('DELETE FROM manual_fts').run();
+        if (hasSoftwareCatalog) db.prepare('DELETE FROM software_licenses').run();
+        db.prepare('DELETE FROM items').run();
+        db.prepare('DELETE FROM tags').run();
       }
-      const insert = db.prepare(`
-        INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
+
+      const insertItem = db.prepare(`
+        INSERT INTO items (id,name,common_name,category,brand,model,serial_number,year,
           purchase_date,purchase_price,replacement_value,replacement_value_note,
           condition,condition_notes,location,description,quantity,update_checks_enabled,
-          requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes)
-        VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
+          warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
+          parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
+          requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes,
+          created_at,updated_at)
+        VALUES (@id,@name,@common_name,@category,@brand,@model,@serial_number,@year,
           @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
           @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
-          @requires_power,@power_adapter_voltage,@power_adapter_current,@power_adapter_polarity,@power_adapter_notes)
+          @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,@value_updated_at,
+          NULL,@depreciated_value,@on_insurance_policy,@insurance_policy_note,
+          @requires_power,@power_adapter_voltage,@power_adapter_current,@power_adapter_polarity,@power_adapter_notes,
+          @created_at,@updated_at)
       `);
-      let n = 0;
+      const setParent = db.prepare('UPDATE items SET parent_item_id=? WHERE id=?');
+      const insertAttachment = db.prepare(`
+        INSERT INTO attachments (id,item_id,filename,original_name,relative_path,mime_type,type,
+          version,description,source_url,metadata,extracted_text,created_at)
+        VALUES (@id,@item_id,@filename,@original_name,@relative_path,@mime_type,@type,
+          @version,@description,@source_url,@metadata,'',@created_at)
+      `);
+      const insertMaintenance = db.prepare(`
+        INSERT INTO maintenance_log (id,item_id,service_date,service_type,note,created_at)
+        VALUES (@id,@item_id,@service_date,@service_type,@note,@created_at)
+      `);
+      const insertLoan = db.prepare(`
+        INSERT INTO loan_log (id,item_id,borrower_name,borrower_contact,loaned_at,due_date,
+          returned_at,note,condition_out,condition_in,created_at)
+        VALUES (@id,@item_id,@borrower_name,@borrower_contact,@loaned_at,@due_date,
+          @returned_at,@note,@condition_out,@condition_in,@created_at)
+      `);
+      const cleanText = (value, max = 2000) => String(value ?? '').slice(0, max);
+      const validId = (value) => {
+        const id = Number(value);
+        return Number.isInteger(id) && id > 0 ? id : null;
+      };
+      const idMap = new Map();
+      const pending = [];
+
       for (const raw of items) {
-        const data = sanitizeItemInput(raw);
-        const r = insert.run(data);
-        setItemTags(r.lastInsertRowid, (raw.tags || []).map(t => typeof t === 'string' ? t : t.name));
-        n++;
+        const data = sanitizeItemInput(raw || {});
+        const sourceId = validId(raw?.id);
+        const inserted = insertItem.run({
+          ...data,
+          id: replace ? sourceId : null,
+          value_updated_at: raw?.value_updated_at ? cleanText(raw.value_updated_at, 40) : null,
+          created_at: cleanText(raw?.created_at, 40) || new Date().toISOString(),
+          updated_at: cleanText(raw?.updated_at, 40) || new Date().toISOString()
+        });
+        const newId = Number(inserted.lastInsertRowid);
+        if (sourceId) idMap.set(sourceId, newId);
+        pending.push({ raw: raw || {}, newId, parentSourceId: validId(raw?.parent_item_id) });
+        setItemTags(newId, (raw?.tags || []).map(t => typeof t === 'string' ? t : t?.name));
       }
-      return n;
+
+      for (const row of pending) {
+        const parentId = row.parentSourceId ? idMap.get(row.parentSourceId) : null;
+        if (parentId && parentId !== row.newId) setParent.run(parentId, row.newId);
+      }
+
+      let importedAttachments = 0;
+      let skippedAttachments = 0;
+      let importedMaintenance = 0;
+      let importedLoans = 0;
+      for (const row of pending) {
+        const seenAttachments = new Set();
+        for (const att of Array.isArray(row.raw.attachments) ? row.raw.attachments : []) {
+          const sourceAttachmentId = validId(att?.id);
+          if (sourceAttachmentId && seenAttachments.has(sourceAttachmentId)) continue;
+          if (sourceAttachmentId) seenAttachments.add(sourceAttachmentId);
+          const relativePath = existingUploadRelativePath(att?.relative_path || att?.filename);
+          if (!relativePath) {
+            skippedAttachments++;
+            continue;
+          }
+          insertAttachment.run({
+            id: replace ? sourceAttachmentId : null,
+            item_id: row.newId,
+            filename: path.basename(relativePath),
+            original_name: cleanText(att?.original_name || path.basename(relativePath), 500),
+            relative_path: relativePath,
+            mime_type: cleanText(att?.mime_type, 200),
+            type: cleanText(att?.type || 'other', 50),
+            version: cleanText(att?.version, 100),
+            description: cleanText(att?.description, 500),
+            source_url: cleanText(att?.source_url, 2000),
+            metadata: JSON.stringify(att?.metadata && typeof att.metadata === 'object' ? att.metadata : {}),
+            created_at: cleanText(att?.created_at, 40) || new Date().toISOString()
+          });
+          importedAttachments++;
+        }
+
+        for (const entry of Array.isArray(row.raw.maintenance) ? row.raw.maintenance : []) {
+          insertMaintenance.run({
+            id: replace ? validId(entry?.id) : null,
+            item_id: row.newId,
+            service_date: cleanText(entry?.service_date, 10) || new Date().toISOString().slice(0, 10),
+            service_type: cleanText(entry?.service_type || 'maintenance', 80),
+            note: cleanText(entry?.note, 2000),
+            created_at: cleanText(entry?.created_at, 40) || new Date().toISOString()
+          });
+          importedMaintenance++;
+        }
+
+        for (const entry of Array.isArray(row.raw.loans) ? row.raw.loans : []) {
+          insertLoan.run({
+            id: replace ? validId(entry?.id) : null,
+            item_id: row.newId,
+            borrower_name: cleanText(entry?.borrower_name, 300) || 'Unknown borrower',
+            borrower_contact: cleanText(entry?.borrower_contact, 200),
+            loaned_at: cleanText(entry?.loaned_at, 10) || new Date().toISOString().slice(0, 10),
+            due_date: entry?.due_date ? cleanText(entry.due_date, 10) : null,
+            returned_at: entry?.returned_at ? cleanText(entry.returned_at, 10) : null,
+            note: cleanText(entry?.note, 2000),
+            condition_out: cleanText(entry?.condition_out, 500),
+            condition_in: cleanText(entry?.condition_in, 500),
+            created_at: cleanText(entry?.created_at, 40) || new Date().toISOString()
+          });
+          importedLoans++;
+        }
+      }
+
+      let importedSoftware = 0;
+      if (hasSoftwareCatalog) {
+        for (const raw of softwareLicenses) {
+          const hostSourceId = validId(raw?.host_item_id);
+          const created = createSoftware({
+            ...(raw || {}),
+            host_item_id: hostSourceId ? idMap.get(hostSourceId) || null : null
+          });
+          const screenshotPath = existingUploadRelativePath(raw?.screenshot_path);
+          if (screenshotPath) updateSoftwareScreenshot(created.id, screenshotPath);
+          importedSoftware++;
+        }
+      }
+
+      return {
+        imported: pending.length,
+        importedAttachments,
+        skippedAttachments,
+        importedMaintenance,
+        importedLoans,
+        importedSoftware
+      };
     })();
-    res.json({ ok: true, imported: count });
+
+    syncBrandsFromItems();
+    let manualIndex = { processed: 0, indexed: 0 };
+    try { manualIndex = await reindexRestoredManuals(); } catch (err) {
+      console.warn('JSON import completed, but manual search could not be rebuilt:', err.message);
+    }
+    res.json({ ...result, ok: true, manualsProcessed: manualIndex.processed, indexedManuals: manualIndex.indexed });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => {
-  if (!req.file?.buffer) return res.status(400).json({ error: 'Choose a Studio Inventory backup ZIP' });
+  if (!req.file?.path) return res.status(400).json({ error: 'Choose a Studio Inventory backup ZIP' });
+  const restoreId = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+  const stageRoot = path.join(DATA_DIR, `.restore-stage-${restoreId}`);
+  const stageUploads = path.join(stageRoot, 'uploads');
+  const stageInbox = path.join(stageRoot, 'manual-inbox');
+  const rollbackUploads = path.join(DATA_DIR, `.restore-previous-uploads-${restoreId}`);
+  const rollbackInbox = path.join(DATA_DIR, `.restore-previous-inbox-${restoreId}`);
+  const uploadSwap = { oldMoved: false, newMoved: false };
+  const inboxSwap = { oldMoved: false, newMoved: false };
+  let restoreSucceeded = false;
+
   try {
-    const zip = new AdmZip(req.file.buffer);
+    const zip = new AdmZip(req.file.path);
     const backupEntry = zip.getEntry('backup.json');
     if (!backupEntry) return res.status(400).json({ error: 'Backup ZIP is missing backup.json' });
 
     const backup = JSON.parse(backupEntry.getData().toString('utf8'));
     if (backup?.manifest?.format !== 'studio-inventory-full-backup' || !backup.tables) {
       return res.status(400).json({ error: 'This is not a Studio Inventory full backup ZIP' });
+    }
+
+    fs.mkdirSync(stageUploads, { recursive: true });
+    fs.mkdirSync(stageInbox, { recursive: true });
+    let restoredFiles = 0;
+    for (const entry of zip.getEntries()) {
+      if (safeExtractEntry(entry, stageUploads, 'uploads')) restoredFiles++;
+      if (safeExtractEntry(entry, stageInbox, 'manual-inbox')) restoredFiles++;
     }
 
     let restoredRows = 0;
@@ -2061,30 +2292,45 @@ app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => 
         for (const table of BACKUP_TABLES) {
           restoredRows += insertBackupRows(table, backup.tables[table] || []);
         }
+
+        const violations = db.pragma('foreign_key_check');
+        if (violations.length) {
+          throw new Error(`Backup contains ${violations.length} invalid database relationship(s)`);
+        }
+
+        swapStagedDirectory(UPLOADS_DIR, stageUploads, rollbackUploads, uploadSwap);
+        swapStagedDirectory(MANUAL_INBOX_DIR, stageInbox, rollbackInbox, inboxSwap);
       })();
+      restoreSucceeded = true;
+    } catch (err) {
+      try { rollbackDirectorySwap(MANUAL_INBOX_DIR, rollbackInbox, inboxSwap); } catch (rollbackErr) {
+        console.error('Could not roll back manual inbox after failed restore:', rollbackErr);
+      }
+      try { rollbackDirectorySwap(UPLOADS_DIR, rollbackUploads, uploadSwap); } catch (rollbackErr) {
+        console.error('Could not roll back uploads after failed restore:', rollbackErr);
+      }
+      throw err;
     } finally {
       db.pragma('foreign_keys = ON');
     }
 
-    fs.rmSync(UPLOADS_DIR, { recursive: true, force: true });
-    fs.rmSync(MANUAL_INBOX_DIR, { recursive: true, force: true });
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-    fs.mkdirSync(MANUAL_INBOX_DIR, { recursive: true });
-
-    let restoredFiles = 0;
-    for (const entry of zip.getEntries()) {
-      if (safeExtractEntry(entry, UPLOADS_DIR, 'uploads')) restoredFiles++;
-      if (safeExtractEntry(entry, MANUAL_INBOX_DIR, 'manual-inbox')) restoredFiles++;
-    }
-
     if (backup.settings) {
-      writeSettings({
-        guestEnabled: !!backup.settings.guestEnabled,
-        guestToken: backup.settings.guestToken || readSettings().guestToken
-      });
+      try {
+        writeSettings({
+          guestEnabled: !!backup.settings.guestEnabled,
+          guestToken: backup.settings.guestToken || readSettings().guestToken
+        });
+      } catch (settingsErr) {
+        console.warn('Backup restored, but guest settings could not be updated:', settingsErr.message);
+      }
     }
 
-    const indexedManuals = await reindexRestoredManuals();
+    let manualIndex = { processed: 0, indexed: 0 };
+    try {
+      manualIndex = await reindexRestoredManuals();
+    } catch (indexErr) {
+      console.warn('Backup restored, but manual search could not be rebuilt:', indexErr.message);
+    }
     const itemCount = db.prepare('SELECT COUNT(*) as c FROM items').get().c;
     res.json({
       ok: true,
@@ -2092,10 +2338,18 @@ app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => 
       rows: restoredRows,
       files: restoredFiles,
       items: itemCount,
-      indexedManuals
+      indexedManuals: manualIndex.indexed,
+      manualsProcessed: manualIndex.processed
     });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Could not restore backup ZIP' });
+  } finally {
+    try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch { /* cleanup on next run */ }
+    try { if (fs.existsSync(stageRoot)) fs.rmSync(stageRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    if (restoreSucceeded) {
+      try { if (fs.existsSync(rollbackUploads)) fs.rmSync(rollbackUploads, { recursive: true, force: true }); } catch { /* ignore */ }
+      try { if (fs.existsSync(rollbackInbox)) fs.rmSync(rollbackInbox, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   }
 });
 

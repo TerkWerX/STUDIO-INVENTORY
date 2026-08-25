@@ -121,7 +121,7 @@ export function renderInsurance(items) {
         return `
           <div class="insurance-item">
             ${photo
-              ? `<img class="insurance-photo" src="${fileUrl(photo.filename)}" alt="${escapeHtml(item.name)}">`
+              ? `<img class="insurance-photo" src="${fileUrl(photo.relative_path)}" alt="${escapeHtml(item.name)}">`
               : `<div class="insurance-photo-placeholder">No Photo</div>`
             }
             <div>

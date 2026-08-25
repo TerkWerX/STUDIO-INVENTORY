@@ -47,7 +47,7 @@ async function main() {
     seed.on('close', c => (c === 0 ? resolve() : reject(new Error('seed failed'))));
   });
 
-  const server = spawn('node', ['server.js'], { cwd: ROOT, env, stdio: 'ignore' });
+  const server = spawn('node', ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'inherit', 'inherit'] });
   const base = `http://127.0.0.1:${PORT}/api`;
 
   try {
@@ -67,6 +67,8 @@ async function main() {
         depreciated_value: 60,
         on_insurance_policy: true,
         insurance_policy_note: 'Rider A',
+        warranty_end_date: '2099-05-01',
+        warranty_note: 'Transferable warranty',
         requires_power: true,
         power_adapter_voltage: '48V phantom',
         power_adapter_current: '',
@@ -210,6 +212,15 @@ async function main() {
     assert(enriched.loans.some(l => l.borrower_name === 'Mike'), 'loan history on item missing');
     console.log('✓ enrichItem loans');
 
+    const publicItem = await api(base, `/public/items/${created.id}`);
+    assert(publicItem.name === created.name, 'public QR item missing display fields');
+    assert(Array.isArray(publicItem.manuals), 'public QR item missing manuals');
+    for (const privateField of ['attachments', 'receipts', 'loans', 'maintenance', 'purchase_price',
+      'insurance_policy_note', 'on_insurance_policy', 'activeLoan']) {
+      assert(!Object.prototype.hasOwnProperty.call(publicItem, privateField), `public QR leaked ${privateField}`);
+    }
+    console.log('✓ public QR payload excludes private inventory data');
+
     const lookup = await api(base, '/lookup?code=SM57-88421');
     assert(lookup.item?.name, 'serial lookup failed');
     console.log('✓ barcode/serial lookup');
@@ -327,11 +338,30 @@ async function main() {
     const restoreJson = await restoreRes.json().catch(() => ({}));
     if (!restoreRes.ok) throw new Error(`full backup restore failed: ${restoreJson.error || restoreRes.statusText}`);
     assert(restoreJson.files >= 1, 'full backup restore did not restore files');
+    assert(restoreJson.manualsProcessed >= 1, `full backup restore did not process restored manuals: ${JSON.stringify(restoreJson)}`);
     const restoredFloorplans = await api(base, '/floorplans');
     const restoredCal = restoredFloorplans.find(p => p.id === fp.id);
     assert(restoredCal?.wall_photos?.['0']?.calibrated === true, 'full backup restore lost wall calibration');
     assert(restoredCal?.items?.length >= 1, 'full backup restore lost wall placements');
     console.log('✓ full backup export / restore');
+
+    const invalidZip = new AdmZip(backupBuffer);
+    const invalidBackup = JSON.parse(invalidZip.getEntry('backup.json').getData().toString('utf8'));
+    invalidBackup.tables.floorplan_items[0].item_id = 987654321;
+    invalidZip.updateFile('backup.json', Buffer.from(JSON.stringify(invalidBackup), 'utf8'));
+    const invalidRestoreForm = new FormData();
+    invalidRestoreForm.append('backup', new Blob([invalidZip.toBuffer()], { type: 'application/zip' }), 'invalid-backup.zip');
+    const invalidRestoreRes = await fetch(`${base}/import/full`, { method: 'POST', body: invalidRestoreForm });
+    const invalidRestoreBody = await invalidRestoreRes.json().catch(() => ({}));
+    assert(!invalidRestoreRes.ok, 'invalid full backup should be rejected');
+    assert(String(invalidRestoreBody.error || '').includes('invalid database relationship'), 'invalid restore error missing relationship validation');
+    const afterRejectedRestore = await api(base, '/floorplans');
+    const preservedCal = afterRejectedRestore.find(p => p.id === fp.id);
+    assert(preservedCal?.wall_photos?.['0']?.calibrated === true, 'rejected restore changed current database');
+    const preservedWallPath = preservedCal.wall_photos['0'].path;
+    const preservedWallRes = await fetch(`http://127.0.0.1:${PORT}/uploads/${preservedWallPath}`);
+    assert(preservedWallRes.ok, 'rejected restore changed current upload files');
+    console.log('✓ invalid full backup rejected without changing current data');
 
     const sw = await api(base, '/software', {
       method: 'POST',
@@ -364,9 +394,43 @@ async function main() {
     const statsWithSoftware = await api(base, '/stats');
     assert(statsWithSoftware.softwareTotals?.count >= 2, 'software stats missing');
     assert(Array.isArray(statsWithSoftware.softwareRenewals), 'software renewals missing');
-    await api(base, `/software/${sw.id}`, { method: 'DELETE' });
-    await api(base, `/software/${swSub.id}`, { method: 'DELETE' });
     console.log('✓ software licenses');
+
+    await api(base, `/items/${created.id}/maintenance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service_date: '2026-04-01', service_type: 'inspection', note: 'JSON round-trip check' })
+    });
+    const jsonExportRes = await fetch(`${base}/export/json`);
+    assert(jsonExportRes.ok, 'JSON export failed');
+    const jsonExport = await jsonExportRes.json();
+    const jsonImport = await api(base, '/import/json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        items: jsonExport.items,
+        software_licenses: jsonExport.software_licenses,
+        replace: true
+      })
+    });
+    assert(jsonImport.imported === jsonExport.items.length, 'JSON import item count mismatch');
+    assert(jsonImport.importedSoftware === jsonExport.software_licenses.length, 'JSON import software count mismatch');
+    assert(jsonImport.importedAttachments >= 1, 'JSON import did not reconnect existing attachments');
+    const roundTripped = await api(base, `/items/${created.id}`);
+    assert(roundTripped.depreciated_value === 60, 'JSON import lost depreciated value');
+    assert(roundTripped.on_insurance_policy === true, 'JSON import lost insurance flag');
+    assert(roundTripped.insurance_policy_note === 'Rider A', 'JSON import lost insurance note');
+    assert(roundTripped.warranty_end_date === '2099-05-01', 'JSON import lost warranty date');
+    assert(roundTripped.warranty_note === 'Transferable warranty', 'JSON import lost warranty note');
+    assert(roundTripped.requires_power === true, 'JSON import lost power fields');
+    assert(roundTripped.loans.some(l => l.borrower_name === 'Mike'), 'JSON import lost loan history');
+    assert(roundTripped.maintenance.some(m => m.note === 'JSON round-trip check'), 'JSON import lost maintenance history');
+    assert(roundTripped.manuals.length >= 1, 'JSON import lost existing manual attachment metadata');
+    const roundTrippedAccessory = await api(base, `/items/${accessory.id}`);
+    assert(roundTrippedAccessory.parent?.id === parent.id, 'JSON import lost accessory relationship');
+    const roundTrippedSoftware = await api(base, '/software');
+    assert(roundTrippedSoftware.some(s => s.name === 'FabFilter Pro-Q 3'), 'JSON import lost software licenses');
+    console.log('✓ JSON catalog export / replace round-trip');
 
     console.log('\nExtended API smoke test passed.');
   } finally {

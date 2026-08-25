@@ -214,13 +214,14 @@ export function renderBackup(guest = {}, ownerAuth = {}) {
     </div>
 
     <div class="card">
-      <h3 class="section-title">Import Data (JSON)</h3>
+      <h3 class="section-title">Import Inventory Catalog (JSON)</h3>
       <p style="color:var(--text-secondary);margin-bottom:1rem">
-        Restore from a previously exported JSON file. Choose whether to merge or replace all existing data.
+        Import item, tag, accessory, loan, maintenance, and software-license metadata from a Studio Inventory JSON export.
+        Use a Full Backup ZIP to move photos, documents, screenshots, and studio layouts to another computer.
       </p>
       <div class="form-group" style="margin-bottom:1rem">
         <label>
-          <input type="checkbox" id="import-replace"> Replace all existing data (destructive)
+          <input type="checkbox" id="import-replace"> Replace the existing inventory catalog (destructive)
         </label>
       </div>
       <label class="btn btn-secondary" style="cursor:pointer">

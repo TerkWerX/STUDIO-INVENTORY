@@ -150,7 +150,11 @@ export const api = {
   importJson: (data, replace = false) => request('/import/json', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items: data.items || data, replace })
+    body: JSON.stringify({
+      items: data.items || data,
+      software_licenses: Array.isArray(data.software_licenses) ? data.software_licenses : undefined,
+      replace
+    })
   }),
   importCsv: (csvText) => request('/import/csv', {
     method: 'POST',

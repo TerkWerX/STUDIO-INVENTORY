@@ -204,6 +204,21 @@ async function main() {
     assert(await page.locator('.manual-finder-row [data-action="archive-manual-url"]').count() > 0, 'manual archive URL buttons missing');
     console.log('✓ manuals');
 
+    await page.evaluate(async () => {
+      const items = await fetch('/api/items').then(r => r.json());
+      const item = items[0];
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'), c => c.charCodeAt(0));
+      const form = new FormData();
+      form.append('files', new Blob([png], { type: 'image/png' }), 'insurance-photo.png');
+      const response = await fetch(`/api/items/${item.id}/photos`, { method: 'POST', body: form });
+      if (!response.ok) throw new Error(`insurance photo upload failed: ${response.status}`);
+    });
+    await navTo(page, 'insurance', '.insurance-item');
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('.insurance-photo'))
+      .some(img => img.complete && img.naturalWidth > 0 && img.src.includes('/uploads/photos/')),
+    { timeout: 15000 });
+    console.log('✓ insurance report photos');
+
     await navTo(page, 'backup', '#guest-enabled');
     assert(await page.locator('#guest-url').count() === 1, 'guest URL input missing');
     assert(await page.locator('#backup-export-full').count() === 1, 'full backup export button missing');

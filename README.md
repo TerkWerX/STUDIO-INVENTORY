@@ -66,7 +66,7 @@ Home studios accumulate serious gear fast. Studio Inventory gives you one place 
 
 ---
 
-## Download (Windows & Mac — no Node required)
+## Download (Windows, macOS & Linux — no Node required)
 
 Pre-built packages are on the **[Releases](https://github.com/TerkWerX/STUDIO-INVENTORY/releases)** page:
 
@@ -75,6 +75,7 @@ Pre-built packages are on the **[Releases](https://github.com/TerkWerX/STUDIO-IN
 | **Windows** | `Studio-Inventory-v…-Windows-Setup.exe` | Double-click the setup file → choose shortcuts → install like a normal Windows app |
 | **Windows portable** | `Studio-Inventory-v…-Windows.zip` | Extract → double-click **Studio Inventory.exe**; useful for testing without installing |
 | **macOS** | `Studio-Inventory-v…-macOS.zip` or `.dmg` | Extract / open DMG → double-click **Start Studio Inventory.command** (or **Install Studio Inventory.command** to copy to Applications) |
+| **Linux x64** | `Studio-Inventory-v…-Linux-x64.tar.gz` or `.zip` | Extract → run `./Start\ Studio\ Inventory.sh` (or `./Install\ Studio\ Inventory.sh`); see [LINUX.md](LINUX.md) |
 
 These bundles include the Node runtime and production dependencies — your friends do **not** need to install Node.js or run `npm install`.
 
@@ -84,7 +85,7 @@ Your inventory lives in the `data/` folder (database + photos + manuals + receip
 
 | How you installed | How to update |
 |-------------------|---------------|
-| **Windows/Mac package** | Download the newer release → run **Install Studio Inventory** again — your `data/` folder is backed up and restored automatically |
+| **Windows/macOS/Linux package** | Download the newer release → run **Install Studio Inventory** again — your `data/` folder is backed up and restored automatically |
 | **Git clone** | `git pull && npm install` — `data/` is gitignored and stays put |
 
 The app checks GitHub at startup and shows an **update available** banner when a newer release is published.

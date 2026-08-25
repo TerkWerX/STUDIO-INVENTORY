@@ -117,3 +117,73 @@ jobs:
           files: |
             dist/Studio-Inventory-${{ github.event.release.tag_name }}-macOS.zip
             dist/Studio-Inventory-${{ github.event.release.tag_name }}-macOS.dmg
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install production dependencies
+        run: npm ci --omit=dev
+
+      - name: Package Linux release
+        run: node scripts/package-release.js linux dist/studio-inventory-linux
+
+      - name: Smoke test Linux installer and packaged app
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/studio-inventory-linux-install-test"
+          data_dir="$RUNNER_TEMP/studio-inventory-linux-data"
+          health_file="$RUNNER_TEMP/studio-inventory-linux-health.json"
+
+          chmod +x "dist/studio-inventory-linux/Install Studio Inventory.sh"
+          "dist/studio-inventory-linux/Install Studio Inventory.sh" --target "$target" --no-start
+
+          test -x "$target/.runtime/node"
+          test -f "$target/server.js"
+          test -x "$target/Start Studio Inventory.sh"
+
+          PORT=3892 STUDIO_DATA_DIR="$data_dir" STUDIO_SKIP_UPDATE_CHECK=1 \
+            "$target/.runtime/node" "$target/server.js" >"$RUNNER_TEMP/studio-inventory-linux.log" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:3892/api/health" >"$health_file"; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          HEALTH_FILE="$health_file" EXPECTED_ROOT="$target" node - <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync(process.env.HEALTH_FILE, 'utf8'));
+          const expected = process.env.EXPECTED_ROOT.replace(/\\/g, '/');
+          if (!health.ok) throw new Error('Installed Linux app health check failed');
+          if (!String(health.appRoot || '').startsWith(expected)) {
+            throw new Error(`Unexpected appRoot: ${health.appRoot}`);
+          }
+          NODE
+
+      - name: Create Linux archives
+        shell: bash
+        run: |
+          cd dist
+          tar -czf "Studio-Inventory-${{ github.event.release.tag_name }}-Linux-x64.tar.gz" studio-inventory-linux
+          zip -r "Studio-Inventory-${{ github.event.release.tag_name }}-Linux-x64.zip" studio-inventory-linux
+
+      - name: Upload Linux assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Studio-Inventory-${{ github.event.release.tag_name }}-Linux-x64.tar.gz
+            dist/Studio-Inventory-${{ github.event.release.tag_name }}-Linux-x64.zip

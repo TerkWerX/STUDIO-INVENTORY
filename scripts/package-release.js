@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Build a self-contained release folder (with node_modules) for Windows or macOS.
- * Usage: node scripts/package-release.js <win|mac> [outputDir]
+ * Build a self-contained release folder (with node_modules) for Windows, macOS, or Linux.
+ * Usage: node scripts/package-release.js <win|mac|linux> [outputDir]
  */
 const fs = require('fs');
 const path = require('path');
@@ -12,8 +12,14 @@ const platform = (process.argv[2] || '').toLowerCase();
 const outRoot = path.resolve(process.argv[3] || path.join(ROOT, 'dist', `studio-inventory-${platform}`));
 const APP_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
-if (!['win', 'mac'].includes(platform)) {
-  console.error('Usage: node scripts/package-release.js <win|mac> [outputDir]');
+if (!['win', 'mac', 'linux'].includes(platform)) {
+  console.error('Usage: node scripts/package-release.js <win|mac|linux> [outputDir]');
+  process.exit(1);
+}
+
+const requiredHost = { win: 'win32', mac: 'darwin', linux: 'linux' }[platform];
+if (process.platform !== requiredHost) {
+  console.error(`The ${platform} package must be built on ${requiredHost} so Node and native dependencies match the target OS.`);
   process.exit(1);
 }
 
@@ -25,6 +31,7 @@ const COPY = [
   'package-lock.json',
   'README.md',
   'MAC.md',
+  'LINUX.md',
   'LICENSE',
   'start-studio-inventory.bat',
   'start-studio-inventory.sh',
@@ -87,7 +94,7 @@ function copyNodeRuntime() {
   const nodeDest = path.join(runtimeDir, nodeName);
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.copyFileSync(nodeSrc, nodeDest);
-  if (platform === 'mac') fs.chmodSync(nodeDest, 0o755);
+  if (platform !== 'win') fs.chmodSync(nodeDest, 0o755);
   return path.join('.runtime', nodeName);
 }
 
@@ -430,7 +437,7 @@ if (platform === 'win') {
     'README-INSTALL.txt',
     `Studio Inventory — Windows\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Studio Inventory.exe"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall shortcuts (optional):\r\n  Double-click "Install Studio Inventory.exe"\r\n  Creates Start Menu + Desktop shortcuts in %LOCALAPPDATA%\\Studio Inventory\r\n\r\nFallback scripts are included if Windows blocks the launcher:\r\n  Start Studio Inventory.bat\r\n  Install Studio Inventory.bat\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release ZIP\r\n  2. Extract it anywhere temporary\r\n  3. Run "Install Studio Inventory.exe" from the new package\r\n  Your data\\ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks GitHub at startup for updates.\r\n`
   );
-} else {
+} else if (platform === 'mac') {
   writeFile(
     'Start Studio Inventory.command',
     `#!/bin/bash\ncd "$(dirname "$0")"\necho "Starting Studio Inventory at http://localhost:3847"\nopen "http://localhost:3847" 2>/dev/null || true\n"./${runtimeNode}" server.js\n`
@@ -445,6 +452,52 @@ if (platform === 'win') {
   writeFile(
     'README-INSTALL.txt',
     `Studio Inventory — macOS\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Start Studio Inventory.command"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall to Applications (optional):\r\n  Double-click "Install Studio Inventory.command"\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release DMG or ZIP\r\n  2. Run "Install Studio Inventory.command" from the new package\r\n  Your data/ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks GitHub at startup for updates.\r\n\r\nFirst time: if macOS blocks the script, right-click → Open.\r\nFull guide: MAC.md or https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/MAC.md\r\n`
+  );
+} else {
+  writeFile(
+    'Start Studio Inventory.sh',
+    `#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+echo "Starting Studio Inventory at http://localhost:3847"
+if command -v xdg-open >/dev/null 2>&1; then
+  (sleep 1; xdg-open "http://localhost:3847" >/dev/null 2>&1 || true) &
+fi
+exec "./${runtimeNode}" server.js
+`
+  );
+  writeFile(
+    'Install Studio Inventory.sh',
+    `#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+exec bash "./installers/linux/install.sh" "$@"
+`
+  );
+  fs.chmodSync(path.join(outRoot, 'Start Studio Inventory.sh'), 0o755);
+  fs.chmodSync(path.join(outRoot, 'Install Studio Inventory.sh'), 0o755);
+  fs.chmodSync(path.join(outRoot, 'start-studio-inventory.sh'), 0o755);
+  fs.chmodSync(path.join(outRoot, 'installers', 'linux', 'install.sh'), 0o755);
+  writeFile(
+    'README-INSTALL.txt',
+    `Studio Inventory — Linux
+
+Portable (no install):
+  1. Extract the archive
+  2. Run: ./Start\\ Studio\\ Inventory.sh
+  3. Your browser opens at http://localhost:3847
+
+Install for your user (optional):
+  Run: ./Install\\ Studio\\ Inventory.sh
+  Installs under ~/.local/share/studio-inventory and adds a desktop/application shortcut.
+
+Updating preserves your gear, photos, manuals, wall photos, and receipts:
+  1. Download and extract the newer release
+  2. Run ./Install\\ Studio\\ Inventory.sh from the new package
+
+The app includes its own Node runtime and checks GitHub at startup for updates.
+Full guide: LINUX.md or https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/LINUX.md
+`
   );
 }
 

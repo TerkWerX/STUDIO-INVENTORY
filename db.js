@@ -2,6 +2,12 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const { computeItemCompleteness } = require('./lib/completeness');
+const {
+  profileById,
+  sanitizeInstrumentType,
+  sanitizeInstrumentSpecs,
+  instrumentDetails
+} = require('./lib/instrument-profiles');
 
 const DATA_DIR = process.env.STUDIO_DATA_DIR
   ? path.resolve(process.env.STUDIO_DATA_DIR)
@@ -24,7 +30,10 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
 const DEFAULT_CATEGORIES = [
-  'Guitar', 'Bass', 'Keyboard', 'Drum Kit', 'Microphone', 'Audio Interface',
+  'Guitar', 'Bass', 'Keyboard', 'Brass Instrument', 'Bowed String Instrument',
+  'Drum Kit', 'Electronic Drum Kit', 'Electronic Drum Component',
+  'Acoustic Drum Component', 'Drum Hardware', 'Instrument Accessory',
+  'Microphone', 'Audio Interface',
   'Mixer', 'Control Surface', 'Speaker/Monitor', 'Amplifier', 'Pedal',
   'Cable/Accessory', 'Other'
 ];
@@ -87,6 +96,12 @@ function runMigrations() {
     db.exec("ALTER TABLE items ADD COLUMN power_adapter_current TEXT DEFAULT ''");
     db.exec("ALTER TABLE items ADD COLUMN power_adapter_polarity TEXT DEFAULT ''");
     db.exec("ALTER TABLE items ADD COLUMN power_adapter_notes TEXT DEFAULT ''");
+  }
+  if (!itemCols.includes('instrument_type')) {
+    db.exec("ALTER TABLE items ADD COLUMN instrument_type TEXT DEFAULT ''");
+  }
+  if (!itemCols.includes('instrument_specs_json')) {
+    db.exec("ALTER TABLE items ADD COLUMN instrument_specs_json TEXT NOT NULL DEFAULT '{}'");
   }
 
   const attCols2 = db.prepare('PRAGMA table_info(attachments)').all().map(c => c.name);
@@ -299,6 +314,8 @@ function initSchema() {
       name TEXT NOT NULL,
       common_name TEXT DEFAULT '',
       category TEXT DEFAULT '',
+      instrument_type TEXT DEFAULT '',
+      instrument_specs_json TEXT NOT NULL DEFAULT '{}',
       brand TEXT DEFAULT '',
       model TEXT DEFAULT '',
       serial_number TEXT DEFAULT '',
@@ -421,6 +438,21 @@ function safeJsonParse(str) {
   try { return JSON.parse(str || '{}'); } catch { return {}; }
 }
 
+function itemInstrumentData(item) {
+  const instrument_type = sanitizeInstrumentType(item?.instrument_type);
+  const instrument_specs = sanitizeInstrumentSpecs(
+    instrument_type,
+    item?.instrument_specs_json || item?.instrument_specs
+  );
+  const profile = profileById.get(instrument_type);
+  return {
+    instrument_type,
+    instrument_type_label: profile?.label || '',
+    instrument_specs,
+    instrument_details: instrumentDetails(instrument_type, instrument_specs)
+  };
+}
+
 function parseItemWallCutout(item) {
   const path = String(item?.wall_cutout_path || '').trim();
   if (!path) return null;
@@ -472,6 +504,7 @@ function enrichItem(item) {
   }
   return {
     ...item,
+    ...itemInstrumentData(item),
     brand_logo_path,
     update_checks_enabled: item.update_checks_enabled !== 0,
     requires_power: item.requires_power !== 0,
@@ -489,6 +522,7 @@ function enrichItem(item) {
       const att = getAttachmentsForItem(child.id);
       return {
         ...child,
+        ...itemInstrumentData(child),
         on_insurance_policy: child.on_insurance_policy !== 0,
         update_checks_enabled: child.update_checks_enabled !== 0,
         requires_power: child.requires_power !== 0,
@@ -540,11 +574,18 @@ function sanitizeItemInput(body) {
   const studio_status = statuses.includes(body.studio_status) ? body.studio_status : 'in_studio';
   const parentId = body.parent_item_id != null && body.parent_item_id !== ''
     ? parseInt(body.parent_item_id, 10) : null;
+  const instrument_type = sanitizeInstrumentType(body.instrument_type);
+  const instrument_specs = sanitizeInstrumentSpecs(
+    instrument_type,
+    body.instrument_specs ?? body.instrument_specs_json
+  );
 
   return {
     name: str(body.name, 300) || 'Unnamed Item',
     common_name: str(body.common_name, 300),
     category: str(body.category, 100),
+    instrument_type,
+    instrument_specs_json: JSON.stringify(instrument_specs),
     brand: str(body.brand, 150),
     model: str(body.model, 150),
     serial_number: str(body.serial_number, 200),
@@ -583,6 +624,31 @@ function getParentSummary(parentId) {
 
 function getAccessoryItems(parentId) {
   return db.prepare('SELECT * FROM items WHERE parent_item_id = ? ORDER BY name').all(parentId);
+}
+
+function getAssemblyTotals(itemId) {
+  const root = db.prepare('SELECT purchase_price,replacement_value,quantity FROM items WHERE id=?').get(itemId);
+  if (!root) return null;
+  const components = db.prepare(`
+    WITH RECURSIVE descendants(id) AS (
+      SELECT id FROM items WHERE parent_item_id = ?
+      UNION
+      SELECT child.id FROM items child JOIN descendants parent ON child.parent_item_id = parent.id
+    )
+    SELECT COUNT(*) AS component_count,
+      COALESCE(SUM(purchase_price * quantity), 0) AS component_purchase,
+      COALESCE(SUM(replacement_value * quantity), 0) AS component_replacement
+    FROM items WHERE id IN (SELECT id FROM descendants)
+  `).get(itemId);
+  const itemPurchase = Number(root.purchase_price || 0) * Number(root.quantity || 1);
+  const itemReplacement = Number(root.replacement_value || 0) * Number(root.quantity || 1);
+  return {
+    component_count: Number(components.component_count || 0),
+    component_purchase: Number(components.component_purchase || 0),
+    component_replacement: Number(components.component_replacement || 0),
+    total_purchase: itemPurchase + Number(components.component_purchase || 0),
+    total_replacement: itemReplacement + Number(components.component_replacement || 0)
+  };
 }
 
 function getRacks() {
@@ -1395,6 +1461,7 @@ module.exports = {
   sanitizeItemInput,
   getTagsForItem,
   getAttachmentsForItem,
+  getAssemblyTotals,
   itemUploadDir,
   removeItemUploadDirs,
   safeJsonParse,

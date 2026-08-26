@@ -236,7 +236,16 @@ async function main() {
     assert(await page.locator('#label-scan-file').count() === 1, 'label scan input missing');
     assert(await page.locator('#requires_power').count() === 1, 'requires power field missing');
     assert(await page.locator('#power_adapter_voltage').count() === 1, 'adapter voltage field missing');
-    console.log('✓ item form extended fields');
+    assert(await page.locator('#instrument_type').count() === 1, 'smart item profile selector missing');
+    await page.selectOption('#instrument_type', 'electronic_drum_kit');
+    assert(await page.inputValue('#category') === 'Electronic Drum Kit', 'profile did not set electronic drum category');
+    assert(await page.locator('#instrument-spec-kit_configuration').count() === 1, 'electronic drum configuration field missing');
+    assert(await page.locator('#instrument-spec-module_count').count() === 1, 'electronic drum module field missing');
+    assert((await page.textContent('#item-profile-editor')).includes('Trigger cable snake'), 'electronic drum accessory suggestions missing');
+    await page.selectOption('#instrument_type', 'equipment_mount');
+    assert(await page.locator('#instrument-spec-compatibility_status').count() === 1, 'mount compatibility field missing');
+    assert(await page.locator('#instrument-spec-adapter_chain').count() === 1, 'mount adapter chain field missing');
+    console.log('✓ item form smart profiles');
 
     const stats = await page.evaluate(async () => {
       const r = await fetch('/api/stats');

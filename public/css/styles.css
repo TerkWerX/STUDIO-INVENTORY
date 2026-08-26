@@ -1914,6 +1914,66 @@ tbody tr:hover { background: var(--bg-hover); }
 .scan-results { margin-top: 1rem; }
 .scan-photo-label { margin-top: 1rem; width: 100%; }
 .scan-photo-status { min-height: 1.5em; margin-top: 0.75rem; }
+
+.item-profile-editor {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+}
+.value-estimate-row { display: flex; gap: 0.5rem; align-items: stretch; min-width: 0; }
+.value-estimate-row input { flex: 1; min-width: 0; }
+.profile-editor-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.profile-editor-heading .section-title { margin: 0 0 0.25rem; }
+.profile-category-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}
+.profile-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.profile-fields-grid .full-width { grid-column: 1 / -1; }
+.profile-suggestions-preview { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.profile-suggestion-chips { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.65rem; }
+.profile-suggestion-chips span {
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+.recommended-accessory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
+.recommended-accessory-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+}
+.recommended-accessory-item > div { display: flex; flex-direction: column; min-width: 0; }
+.instrument-profile-card .detail-grid { margin-top: 0.75rem; }
+.assembly-value-rollup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg-tertiary);
+}
 .scan-result-header {
   display: flex;
   justify-content: space-between;
@@ -3379,6 +3439,8 @@ tbody tr:hover { background: var(--bg-hover); }
   .phone-upload-row { align-items: center; }
   .phone-upload-links { width: 100%; min-width: 0; }
   .phone-upload-url code { overflow-wrap: anywhere; }
+  .profile-editor-heading { flex-direction: column; }
+  .profile-fields-grid, .recommended-accessory-grid { grid-template-columns: 1fr; }
 }
 
 /* 4K TV enhancement — scale up on very large screens */

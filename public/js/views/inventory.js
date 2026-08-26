@@ -8,6 +8,7 @@ import {
   renderCompletenessChecklist, renderCompletenessBadge, renderStudioStatusBadge, MAINTENANCE_TYPES
 } from '../lib/completeness-ui.js';
 import { renderItemLoanSection } from './loans.js';
+import { renderAccessoryRecommendations, renderProfileDetailsCard } from '../lib/item-profiles.js';
 
 export function renderInventory(items, meta, filters) {
   const f = filters || {};
@@ -117,7 +118,7 @@ export function renderInventory(items, meta, filters) {
   `;
 }
 
-export function renderItemDetail(item) {
+export function renderItemDetail(item, meta = {}) {
   const photos = item.photos || [];
   const manuals = item.manuals || [];
   const software = item.software || [];
@@ -145,7 +146,7 @@ export function renderItemDetail(item) {
         <div class="detail-badges" style="margin-top:0.5rem">
           ${renderStudioStatusBadge(item) || ''}
           ${item.on_insurance_policy ? `<span class="policy-badge">On Insurance Policy</span>` : ''}
-          ${item.parent?.name ? `<span class="parent-link-badge">Accessory of <button type="button" class="btn btn-ghost btn-sm" data-action="view-parent" data-id="${item.parent.id}">${escapeHtml(item.parent.name)}</button></span>` : ''}
+          ${item.parent?.name ? `<span class="parent-link-badge">Part of / used with <button type="button" class="btn btn-ghost btn-sm" data-action="view-parent" data-id="${item.parent.id}">${escapeHtml(item.parent.name)}</button></span>` : ''}
         </div>
       </div>
       <div class="btn-group">
@@ -248,6 +249,8 @@ export function renderItemDetail(item) {
       ` : ''}
     </div>
 
+    ${renderProfileDetailsCard(item, meta.instrumentProfiles || [])}
+
     <div class="card documentation-summary-card">
       <h3 class="section-title">Documentation</h3>
       <div class="detail-grid">
@@ -291,15 +294,24 @@ export function renderItemDetail(item) {
         <div class="detail-field"><div class="field-label">Purchase Date</div><div class="field-value">${formatDate(item.purchase_date)}</div></div>
         <div class="detail-field"><div class="field-label">Insurance Policy</div><div class="field-value">${item.on_insurance_policy ? 'Listed' : 'Not listed'}</div></div>
       </div>
+      ${item.assembly_totals?.component_count ? `
+        <div class="assembly-value-rollup">
+          <strong>Complete assembly · ${item.assembly_totals.component_count} linked part${item.assembly_totals.component_count === 1 ? '' : 's'}</strong>
+          <span>Purchase total ${formatCurrency(item.assembly_totals.total_purchase)} · Replacement total ${formatCurrency(item.assembly_totals.total_replacement)}</span>
+          <span class="text-muted-sm">Includes every nested component, down to cables, brackets, and fasteners.</span>
+        </div>
+      ` : ''}
       ${item.replacement_value_note ? `<p class="text-muted-sm value-trio-note">${escapeHtml(item.replacement_value_note)}</p>` : ''}
       ${item.insurance_policy_note ? `<p class="text-muted-sm value-trio-note">Policy: ${escapeHtml(item.insurance_policy_note)}</p>` : ''}
     </div>
 
-    ${!item.parent && (item.accessories || []).length ? `
+    ${renderAccessoryRecommendations(item, meta.instrumentProfiles || [])}
+
+    ${(item.accessories || []).length ? `
     <div class="card">
       <div class="card-header">
-        <h3 class="section-title">Accessories &amp; Sub-items</h3>
-        <button type="button" class="btn btn-secondary btn-sm" data-action="add-accessory" data-id="${item.id}">Add Accessory</button>
+        <h3 class="section-title">Parts, Accessories &amp; Sub-items</h3>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="add-accessory" data-id="${item.id}">Add Part / Accessory</button>
       </div>
       <ul class="accessory-list">
         ${item.accessories.map(acc => `
@@ -315,13 +327,13 @@ export function renderItemDetail(item) {
     </div>
     ` : ''}
 
-    ${!item.parent && !(item.accessories || []).length ? `
+    ${!(item.accessories || []).length ? `
     <div class="card accessory-empty-card">
       <div class="card-header">
-        <h3 class="section-title">Accessories &amp; Sub-items</h3>
-        <button type="button" class="btn btn-secondary btn-sm" data-action="add-accessory" data-id="${item.id}">Add Accessory</button>
+        <h3 class="section-title">Parts, Accessories &amp; Sub-items</h3>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="add-accessory" data-id="${item.id}">Add Part / Accessory</button>
       </div>
-      <p class="text-muted-sm">No accessories linked yet — add cases, cables, spare tubes, etc.</p>
+      <p class="text-muted-sm">No linked components yet — add mounts, screws, cables, cases, stands, or any other separately purchased part.</p>
     </div>
     ` : ''}
 

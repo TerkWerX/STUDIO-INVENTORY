@@ -1,4 +1,4 @@
-const CACHE = 'studio-inventory-v260-mobile-security1';
+const CACHE = 'studio-inventory-v270';
 const ASSETS = [
   '/',
   '/index.html',
@@ -23,6 +23,7 @@ const ASSETS = [
   '/js/views/studio-setup.js',
   '/js/views/studio-browse.js',
   '/js/lib/item-placement.js',
+  '/js/lib/item-profiles.js',
   '/js/views/loans.js',
   '/js/views/scan-lookup.js',
   '/js/views/floorplan-tab.js',

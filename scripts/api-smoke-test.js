@@ -99,6 +99,87 @@ async function main() {
     assert(withAcc.some(i => i.id === accessory.id), 'include_accessories failed');
     console.log('✓ accessories / parent_item_id');
 
+    const meta = await api(base, '/meta');
+    assert(meta.instrumentProfiles.some(profile => profile.id === 'electronic_drum_kit'), 'electronic drum profile missing');
+    assert(meta.instrumentProfiles.some(profile => profile.id === 'equipment_mount'), 'mounting hardware profile missing');
+    assert(meta.instrumentProfiles.some(profile => profile.id === 'studio_monitor'), 'studio monitor profile missing');
+
+    const drumKit = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Combined Alesis Command Mesh Kit',
+        category: 'Electronic Drum Kit',
+        instrument_type: 'electronic_drum_kit',
+        instrument_specs: {
+          kit_configuration: 'Two combined Alesis Command Mesh sets',
+          module_count: 2,
+          tom_count: 6,
+          untrusted_unknown_field: '<script>bad()</script>'
+        }
+      })
+    });
+    assert(drumKit.instrument_specs.module_count === 2, 'electronic drum module count not saved');
+    assert(!Object.prototype.hasOwnProperty.call(drumKit.instrument_specs, 'untrusted_unknown_field'), 'unknown profile field was not removed');
+
+    const controlPad = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Alesis ControlPad',
+        category: 'Electronic Drum Component',
+        instrument_type: 'electronic_percussion_controller',
+        instrument_specs: { playing_pad_count: 8, mount_pattern: 'ControlPad mounting plate' },
+        parent_item_id: drumKit.id,
+        purchase_price: 199
+      })
+    });
+    const adapterMount = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Gibraltar adapter clamp',
+        category: 'Mounting Hardware',
+        instrument_type: 'equipment_mount',
+        instrument_specs: {
+          hardware_type: 'Adapter bracket',
+          compatibility_status: 'Adapter required',
+          incompatible_system: 'Original ControlPad mount did not fit Alesis Command rack clamps',
+          adapter_chain: 'ControlPad plate → Gibraltar clamp → Alesis Command rack tube'
+        },
+        parent_item_id: controlPad.id,
+        purchase_price: 34.99
+      })
+    });
+    const thumbScrews = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'ControlPad mounting thumb screws',
+        category: 'Fasteners / Small Hardware',
+        instrument_type: 'fastener_hardware',
+        instrument_specs: { fastener_type: 'Thumb screw', package_quantity: 4, mounts_item: 'ControlPad mounting plate' },
+        parent_item_id: adapterMount.id,
+        purchase_price: 12.49
+      })
+    });
+    const controlPadDetail = await api(base, `/items/${controlPad.id}`);
+    assert(controlPadDetail.accessories.some(item => item.id === adapterMount.id), 'nested mount not linked to ControlPad');
+    const mountDetail = await api(base, `/items/${adapterMount.id}`);
+    assert(mountDetail.accessories.some(item => item.id === thumbScrews.id), 'thumb screws not linked to mount');
+    const drumKitDetail = await api(base, `/items/${drumKit.id}`);
+    assert(drumKitDetail.assembly_totals.component_count === 3, 'nested assembly component count is wrong');
+    assert(Math.abs(drumKitDetail.assembly_totals.total_purchase - 246.48) < 0.001, 'nested assembly purchase total is wrong');
+    const profileSearch = await api(base, '/items?q=Adapter%20required&include_accessories=1');
+    assert(profileSearch.some(item => item.id === adapterMount.id), 'profile specification search failed');
+    const cycleRes = await fetch(`${base}/items/${drumKit.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_item_id: thumbScrews.id })
+    });
+    assert(cycleRes.status === 400, 'nested item cycle should be rejected');
+    console.log('✓ smart profiles + nested paid component hierarchy');
+
     const checkout = await api(base, `/items/${created.id}/loans`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -433,6 +514,10 @@ async function main() {
     assert(roundTripped.manuals.length >= 1, 'JSON import lost existing manual attachment metadata');
     const roundTrippedAccessory = await api(base, `/items/${accessory.id}`);
     assert(roundTrippedAccessory.parent?.id === parent.id, 'JSON import lost accessory relationship');
+    const roundTrippedMount = await api(base, `/items/${adapterMount.id}`);
+    assert(roundTrippedMount.instrument_type === 'equipment_mount', 'JSON import lost item profile');
+    assert(roundTrippedMount.instrument_specs.compatibility_status === 'Adapter required', 'JSON import lost profile specifications');
+    assert(roundTrippedMount.accessories.some(item => item.id === thumbScrews.id), 'JSON import lost nested component hierarchy');
     const roundTrippedSoftware = await api(base, '/software');
     assert(roundTrippedSoftware.some(s => s.name === 'FabFilter Pro-Q 3'), 'JSON import lost software licenses');
     console.log('✓ JSON catalog export / replace round-trip');

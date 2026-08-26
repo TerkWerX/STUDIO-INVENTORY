@@ -1,9 +1,16 @@
 import { escapeHtml, DEFAULT_TAGS, buildValueEstimateUrl, brandLogoHtml } from '../utils.js';
+import {
+  collectProfileSpecs,
+  findItemProfile,
+  renderProfileEditor,
+  renderProfileOptions
+} from '../lib/item-profiles.js';
 
 export function renderItemForm(item, meta) {
-  const isEdit = !!item;
-  const data = item || {
+  const isEdit = !!item?.id;
+  const defaults = {
     name: '', common_name: '', category: '', brand: '', model: '',
+    instrument_type: '', instrument_specs: {},
     serial_number: '', year: '', purchase_date: '', purchase_price: 0,
     replacement_value: 0, replacement_value_note: '', depreciated_value: 0,
     on_insurance_policy: false, insurance_policy_note: '', parent_item_id: null,
@@ -13,6 +20,8 @@ export function renderItemForm(item, meta) {
     update_checks_enabled: true, warranty_end_date: '', warranty_note: '',
     studio_status: 'in_studio', studio_status_note: '', tags: []
   };
+  const data = { ...defaults, ...(item || {}) };
+  data.instrument_specs = item?.instrument_specs || item?.specs || {};
   const parentItems = (meta.parentItems || []).filter(p => !isEdit || p.id !== data.id);
   const onPolicy = data.on_insurance_policy === true || data.on_insurance_policy === 1;
   const tagNames = (data.tags || []).map(t => typeof t === 'string' ? t : t.name);
@@ -57,6 +66,14 @@ export function renderItemForm(item, meta) {
           </select>
         </div>
         <div class="form-group">
+          <label for="instrument_type">Item Type / Smart Profile</label>
+          <select id="instrument_type">
+            <option value="">Generic item — no type-specific fields</option>
+            ${renderProfileOptions(meta.instrumentProfiles || [], data.instrument_type)}
+          </select>
+          <p class="text-muted-sm" style="margin-top:0.35rem">Adds the useful specifications and suggested parts for this exact kind of gear.</p>
+        </div>
+        <div class="form-group">
           <label for="brand">Brand</label>
           <div class="brand-input-row">
             <input type="text" id="brand" list="brand-suggest-list" value="${escapeHtml(data.brand)}" placeholder="Start typing to match brands...">
@@ -83,6 +100,9 @@ export function renderItemForm(item, meta) {
           </div>
           <p class="text-muted-sm">Photograph the serial plate or power label. Suggested brand, model, serial, and adapter data can be applied after review.</p>
           <div id="label-scan-status" class="text-muted-sm label-scan-status"></div>
+        </div>
+        <div class="form-group full-width item-profile-editor" id="item-profile-editor">
+          ${renderProfileEditor(findItemProfile(meta.instrumentProfiles || [], data.instrument_type), data.instrument_specs)}
         </div>
         <div class="form-group form-mode-full-only">
           <label for="year">Year / Manufacture Date</label>
@@ -160,7 +180,7 @@ export function renderItemForm(item, meta) {
           <input type="text" id="warranty_note" value="${escapeHtml(data.warranty_note || '')}" placeholder="e.g. Sweetwater 2-year, manufacturer 1-year">
         </div>
         <div class="form-group form-mode-full-only">
-          <label for="parent_item_id">Parent Item (accessory of)</label>
+          <label for="parent_item_id">Parent Item / Assembly</label>
           <select id="parent_item_id">
             <option value="">None — top-level gear</option>
             ${parentItems.map(p => `
@@ -169,11 +189,11 @@ export function renderItemForm(item, meta) {
               </option>
             `).join('')}
           </select>
-          <p class="text-muted-sm" style="margin-top:0.35rem">Link cases, cables, extra mics, etc. to the main piece of gear.</p>
+          <p class="text-muted-sm" style="margin-top:0.35rem">Link this record to the instrument, rack, mount, or assembly it belongs to. Nested parts are supported.</p>
         </div>
         <div class="form-group form-mode-full-only">
           <label for="replacement_value">Replacement Value ($)</label>
-          <div style="display:flex;gap:0.5rem;align-items:stretch">
+          <div class="value-estimate-row">
             <input type="number" id="replacement_value" min="0" step="0.01" value="${data.replacement_value || 0}" style="flex:1">
             <button type="button" class="btn btn-accent btn-sm" id="form-auto-estimate" style="min-height:var(--touch-min)">Auto-Estimate</button>
           </div>
@@ -252,6 +272,8 @@ export function collectFormData() {
     name: document.getElementById('name').value,
     common_name: document.getElementById('common_name').value,
     category: document.getElementById('category').value,
+    instrument_type: document.getElementById('instrument_type').value,
+    instrument_specs: collectProfileSpecs(document.getElementById('item-profile-editor')),
     brand: document.getElementById('brand').value,
     model: document.getElementById('model').value,
     serial_number: document.getElementById('serial_number').value,
@@ -281,6 +303,23 @@ export function collectFormData() {
     update_checks_enabled: document.getElementById('update_checks_enabled').checked,
     tags
   };
+}
+
+export function bindItemProfileEditor(profiles = []) {
+  const select = document.getElementById('instrument_type');
+  const category = document.getElementById('category');
+  const editor = document.getElementById('item-profile-editor');
+  if (!select || !editor) return;
+  select.dataset.profileCategory = findItemProfile(profiles, select.value)?.category || '';
+  select.addEventListener('change', () => {
+    const previousCategory = select.dataset.profileCategory || '';
+    const profile = findItemProfile(profiles, select.value);
+    if (category && profile && (!category.value || category.value === previousCategory)) {
+      category.value = profile.category;
+    }
+    select.dataset.profileCategory = profile?.category || '';
+    editor.innerHTML = renderProfileEditor(profile, {});
+  });
 }
 
 export function bindBrandSuggest(brands = []) {

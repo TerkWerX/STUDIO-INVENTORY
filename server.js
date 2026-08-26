@@ -9,7 +9,7 @@ const AdmZip = require('adm-zip');
 const Tesseract = require('tesseract.js');
 const {
   db, DB_PATH, DATA_DIR, UPLOADS_DIR, initSchema,
-  enrichItem, setItemTags, sanitizeItemInput, getTagsForItem, itemUploadDir,
+  enrichItem, setItemTags, sanitizeItemInput, getTagsForItem, getAssemblyTotals, itemUploadDir,
   removeItemUploadDirs, DEFAULT_CATEGORIES, DEFAULT_LOCATIONS,
   ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR,
   addMaintenanceEntry, deleteMaintenanceEntry,
@@ -27,6 +27,7 @@ const {
 const { parseLookupCode } = require('./lib/lookup-code');
 const { summarizeCompleteness, computeItemCompleteness } = require('./lib/completeness');
 const { parseCsv, mapRowToItem } = require('./lib/csv-import');
+const { instrumentProfiles } = require('./lib/instrument-profiles');
 const {
   readSettings, writeSettings, regenerateGuestToken, isValidGuestToken,
   setOwnerPin, verifyOwnerPin, createOwnerSessionToken, revokeOwnerSessionToken,
@@ -311,7 +312,8 @@ function buildSearchQuery(params) {
     conditions.push(`(
       i.name LIKE @q OR i.common_name LIKE @q OR i.brand LIKE @q OR
       i.model LIKE @q OR i.serial_number LIKE @q OR i.description LIKE @q OR
-      i.location LIKE @q OR i.category LIKE @q OR i.replacement_value_note LIKE @q OR
+      i.location LIKE @q OR i.category LIKE @q OR i.instrument_type LIKE @q OR
+      i.instrument_specs_json LIKE @q OR i.replacement_value_note LIKE @q OR
       EXISTS (SELECT 1 FROM item_tags it JOIN tags t ON t.id = it.tag_id
               WHERE it.item_id = i.id AND t.name LIKE @q)
     )`);
@@ -1060,6 +1062,10 @@ function publicItemView(item) {
     name: item.name,
     common_name: item.common_name,
     category: item.category,
+    instrument_type: item.instrument_type,
+    instrument_type_label: item.instrument_type_label,
+    instrument_specs: item.instrument_specs,
+    instrument_details: item.instrument_details,
     brand: item.brand,
     brand_logo_path: item.brand_logo_path,
     model: item.model,
@@ -1413,6 +1419,7 @@ app.get('/api/meta', (_req, res) => {
     tags: db.prepare('SELECT id,name FROM tags ORDER BY name').all(),
     brands: getBrandsWithCounts(),
     conditions: ['New', 'Excellent', 'Good', 'Fair', 'Poor'],
+    instrumentProfiles,
     softwareCategories: SOFTWARE_CATEGORIES,
     licenseTypes: LICENSE_TYPES,
     activationMethods: ACTIVATION_METHODS,
@@ -1535,7 +1542,7 @@ app.get('/api/items', (req, res) => {
 app.get('/api/items/:id', (req, res) => {
   const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
-  res.json(enrichItem(item));
+  res.json({ ...enrichItem(item), assembly_totals: getAssemblyTotals(item.id) });
 });
 
 app.get('/api/items/:id/scan-link', (req, res) => {
@@ -1585,16 +1592,42 @@ app.get('/api/items/:id/photo-qr', async (req, res) => {
   }
 });
 
+function validateParentLink(itemId, parentId) {
+  if (!parentId) return;
+  const first = db.prepare('SELECT id,parent_item_id FROM items WHERE id=?').get(parentId);
+  if (!first) throw new Error('The selected parent item no longer exists.');
+  if (!itemId) return;
+
+  const targetId = Number(itemId);
+  const seen = new Set();
+  let current = first;
+  while (current) {
+    if (Number(current.id) === targetId) {
+      throw new Error('An item cannot belong to itself or one of its own sub-items.');
+    }
+    if (seen.has(Number(current.id))) throw new Error('The selected item hierarchy already contains a loop.');
+    seen.add(Number(current.id));
+    current = current.parent_item_id
+      ? db.prepare('SELECT id,parent_item_id FROM items WHERE id=?').get(current.parent_item_id)
+      : null;
+  }
+}
+
 app.post('/api/items', (req, res) => {
   const data = sanitizeItemInput(req.body);
+  try {
+    validateParentLink(null, data.parent_item_id);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   const result = db.prepare(`
-    INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
+    INSERT INTO items (name,common_name,category,instrument_type,instrument_specs_json,brand,model,serial_number,year,
       purchase_date,purchase_price,replacement_value,replacement_value_note,
       condition,condition_notes,location,description,quantity,update_checks_enabled,
       warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
       parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
       requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes)
-    VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
+    VALUES (@name,@common_name,@category,@instrument_type,@instrument_specs_json,@brand,@model,@serial_number,@year,
       @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
       @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
       @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
@@ -1613,9 +1646,15 @@ app.put('/api/items/:id', (req, res) => {
     return res.status(404).json({ error: 'Item not found' });
   const merged = { ...existingItem, ...(req.body || {}) };
   const data = sanitizeItemInput(merged);
+  try {
+    validateParentLink(req.params.id, data.parent_item_id);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   const valueChanged = Number(existingItem.replacement_value) !== Number(data.replacement_value);
   db.prepare(`
-    UPDATE items SET name=@name,common_name=@common_name,category=@category,brand=@brand,
+    UPDATE items SET name=@name,common_name=@common_name,category=@category,
+      instrument_type=@instrument_type,instrument_specs_json=@instrument_specs_json,brand=@brand,
       model=@model,serial_number=@serial_number,year=@year,purchase_date=@purchase_date,
       purchase_price=@purchase_price,replacement_value=@replacement_value,
       replacement_value_note=@replacement_value_note,condition=@condition,
@@ -1733,13 +1772,13 @@ app.post('/api/import/csv', express.text({ type: ['text/csv', 'text/plain', 'app
     if (!rows.length) return res.status(400).json({ error: 'No data rows found in CSV' });
 
     const insert = db.prepare(`
-      INSERT INTO items (name,common_name,category,brand,model,serial_number,year,
+      INSERT INTO items (name,common_name,category,instrument_type,instrument_specs_json,brand,model,serial_number,year,
         purchase_date,purchase_price,replacement_value,replacement_value_note,
         condition,condition_notes,location,description,quantity,update_checks_enabled,
         warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
         parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
         requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes)
-      VALUES (@name,@common_name,@category,@brand,@model,@serial_number,@year,
+      VALUES (@name,@common_name,@category,@instrument_type,@instrument_specs_json,@brand,@model,@serial_number,@year,
         @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
         @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
         @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
@@ -2240,7 +2279,7 @@ app.get('/api/export/sql', (_req, res) => {
 app.get('/api/export/csv', (req, res) => {
   const { where, values, orderBy } = buildSearchQuery(req.query);
   const items = db.prepare(`SELECT * FROM items ${where} ORDER BY ${orderBy}`).all(values);
-  const headers = ['id','name','common_name','category','brand','model','serial_number','year',
+  const headers = ['id','name','common_name','category','instrument_type','instrument_specs_json','brand','model','serial_number','year',
     'purchase_date','purchase_price','replacement_value','replacement_value_note','condition',
     'condition_notes','location','description','quantity','requires_power','power_adapter_voltage',
     'power_adapter_current','power_adapter_polarity','power_adapter_notes','update_checks_enabled','tags'];
@@ -2287,14 +2326,14 @@ app.post('/api/import/json', async (req, res) => {
       }
 
       const insertItem = db.prepare(`
-        INSERT INTO items (id,name,common_name,category,brand,model,serial_number,year,
+        INSERT INTO items (id,name,common_name,category,instrument_type,instrument_specs_json,brand,model,serial_number,year,
           purchase_date,purchase_price,replacement_value,replacement_value_note,
           condition,condition_notes,location,description,quantity,update_checks_enabled,
           warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
           parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
           requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes,
           created_at,updated_at)
-        VALUES (@id,@name,@common_name,@category,@brand,@model,@serial_number,@year,
+        VALUES (@id,@name,@common_name,@category,@instrument_type,@instrument_specs_json,@brand,@model,@serial_number,@year,
           @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
           @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
           @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,@value_updated_at,

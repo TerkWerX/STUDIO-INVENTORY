@@ -48,6 +48,7 @@ Home studios accumulate serious gear fast. Studio Inventory gives you one place 
 | Area | What you get |
 |------|----------------|
 | **Inventory** | Full CRUD with serials, values, condition, warranty, location, tags, accessories, insurance notes, and quantity |
+| **Smart item profiles** | Type-specific specifications and related-part suggestions for instruments, electronic drums, rack gear, patchbays, monitors, cables, mounts, and fasteners |
 | **Photos & receipts** | Multi-photo gallery, fullscreen lightbox, receipt upload, warranty notes, and documentation checklist |
 | **Manuals & documents** | Upload PDFs/docs, search inside indexed PDFs, find manuals online, save from URL, and import from Manual Inbox |
 | **Manual Inbox** | Dedicated `data/manual-inbox/` folder for browser downloads that need to be attached to a specific gear record |
@@ -115,6 +116,12 @@ Before remote use, open **Backup & Restore** on the studio computer and set an o
 - **Android Chrome / Edge:** full inventory editing and photo capture are supported. Live barcode video is available only when the page is served through HTTPS; on the normal LAN `http://` address, use **Take a Label Photo** or the device's native QR scanner.
 - **iPhone / iPad Safari:** full inventory editing, signed QR item pages, and **Take Photo / Choose from Gallery** are supported. Use **Take a Label Photo** for serial/model recognition.
 - **Security:** remote APIs and uploaded files require the owner session, guest token, or a signed single-item QR link. Incorrect PIN attempts are rate-limited. Do not forward port `3847` to the internet; plain HTTP LAN traffic is not encrypted, so use only a trusted WPA2/WPA3 network or place the app behind trusted HTTPS/VPN access.
+
+### Smart instrument and equipment profiles
+
+Choose **Item Type / Smart Profile** while adding or editing gear. Studio Inventory shows the specifications that matter for that item and suggests related records you may own. Profiles cover brass and bowed strings, guitars and basses, keyboards, acoustic and electronic drums, drum modules and trigger pads, cymbals, rack hardware, mounts, fasteners, patchbays, studio monitors, and audio/data cables.
+
+Related purchases remain separate inventory records with their own price, receipt, serial number, photos, and compatibility result. Records can be nested into assemblies—for example: electronic drum kit → ControlPad → adapter clamp → paid thumb screws. A mount that did not fit can be recorded as incompatible, while the adapter that solved the problem can record the complete mounting chain.
 
 ---
 

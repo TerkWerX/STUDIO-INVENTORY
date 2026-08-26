@@ -7,7 +7,8 @@ import {
   renderInventory, renderItemDetail, bindLightbox, bindPhotoDropZone,
   cleanupPhotoZoneListeners, filterImageFiles
 } from './views/inventory.js';
-import { renderItemForm, collectFormData, bindAutoEstimate, bindBrandSuggest } from './views/item-form.js';
+import { renderItemForm, collectFormData, bindAutoEstimate, bindBrandSuggest, bindItemProfileEditor } from './views/item-form.js';
+import { findItemProfile } from './lib/item-profiles.js';
 import { renderBrandsPage, renderBrandItems } from './views/brands.js';
 import { renderReports, renderInsurance, generatePdf } from './views/reports.js';
 import { renderManuals } from './views/manuals.js';
@@ -50,6 +51,7 @@ const state = {
   selectedBrand: null,
   labelPreselectId: null,
   parentItemId: null,
+  itemDraft: null,
   studioTab: 'rooms',
   floorplanId: null,
   studioBrowseFpId: null,
@@ -65,7 +67,7 @@ const state = {
 const container = document.getElementById('view-container');
 let stopCameraScan = null;
 
-const APP_ASSET_VER = '2.6.0-mobile-security1';
+const APP_ASSET_VER = '2.7.0';
 
 async function ensureFreshAssets() {
   if (localStorage.getItem('app-asset-ver') === APP_ASSET_VER) return false;
@@ -422,7 +424,7 @@ async function navigate(view, params = {}) {
 
       case 'item-detail':
         const item = await api.item(params.id || state.selectedItemId);
-        container.innerHTML = renderItemDetail(item);
+        container.innerHTML = renderItemDetail(item, state.meta);
         bindDetailEvents(item);
         bindPhotoDropZone(container, item, {
           onUpload: async (itemId, files) => {
@@ -438,15 +440,16 @@ async function navigate(view, params = {}) {
       case 'item-form': {
         const editItem = state.editItemId
           ? await api.item(state.editItemId)
-          : (state.parentItemId ? { parent_item_id: state.parentItemId } : null);
+          : (state.itemDraft || (state.parentItemId ? { parent_item_id: state.parentItemId } : null));
         const [parentItems, brands] = await Promise.all([
-          api.items({ sort: 'name' }),
+          api.items({ sort: 'name', include_accessories: '1' }),
           state.meta?.brands?.length ? Promise.resolve(state.meta.brands) : api.brands()
         ]);
         state.brands = brands;
         state.meta = { ...state.meta, brands, parentItems };
         container.innerHTML = renderItemForm(editItem, state.meta);
         state.parentItemId = null;
+        state.itemDraft = null;
         bindFormEvents();
         break;
       }
@@ -761,7 +764,26 @@ function bindDetailEvents(item) {
   container.querySelector('[data-action="add-accessory"]')?.addEventListener('click', () => {
     state.editItemId = null;
     state.parentItemId = item.id;
+    state.itemDraft = { parent_item_id: item.id };
     navigate('item-form');
+  });
+
+  container.querySelectorAll('[data-action="add-recommended-accessory"]').forEach(button => {
+    button.addEventListener('click', () => {
+      const profile = findItemProfile(state.meta?.instrumentProfiles || [], item.instrument_type);
+      const suggestion = profile?.suggestedAccessories?.[Number(button.dataset.suggestionIndex)];
+      if (!suggestion) return;
+      state.editItemId = null;
+      state.parentItemId = item.id;
+      state.itemDraft = {
+        name: suggestion.name,
+        category: suggestion.category,
+        instrument_type: suggestion.instrument_type,
+        instrument_specs: suggestion.specs || {},
+        parent_item_id: item.id
+      };
+      navigate('item-form');
+    });
   });
 
   container.querySelector('[data-action="view-parent"]')?.addEventListener('click', (e) => {
@@ -1027,6 +1049,7 @@ function bindFormEvents() {
   bindItemFormMode();
   bindPowerAdapterToggle();
   bindLabelScanEvents();
+  bindItemProfileEditor(state.meta?.instrumentProfiles || []);
 
   function addTag(name) {
     const n = name.trim();
@@ -1073,6 +1096,11 @@ function bindFormEvents() {
         showToast('Item added', 'success');
         if (data.brand) fetchLogoForBrand(data.brand);
         state.selectedItemId = created.id;
+
+        if (data.parent_item_id) {
+          navigate('item-detail', { id: created.id });
+          return;
+        }
 
         const printPage = await showModal({
           title: 'Print binder page?',

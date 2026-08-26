@@ -57,6 +57,7 @@ function renderItem(item) {
           <div><dt>Replacement</dt><dd class="value-cell">${formatCurrency(item.replacement_value * (item.quantity || 1))}</dd></div>
           ${item.requires_power ? `<div><dt>Power</dt><dd>${escapeHtml([item.power_adapter_voltage, item.power_adapter_current, item.power_adapter_polarity].filter(Boolean).join(' · ') || 'Required')}</dd></div>` : ''}
           ${item.purchase_date ? `<div><dt>Purchased</dt><dd>${formatDate(item.purchase_date)}</dd></div>` : ''}
+          ${(item.instrument_details || []).map(detail => `<div><dt>${escapeHtml(detail.label)}</dt><dd>${escapeHtml(detail.value === true ? 'Yes' : detail.value === false ? 'No' : detail.value)}</dd></div>`).join('')}
         </dl>
 
         ${item.description ? `<p class="scan-desc">${escapeHtml(item.description)}</p>` : ''}

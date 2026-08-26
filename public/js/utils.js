@@ -226,12 +226,12 @@ export function mapMarkerLogoHtml(pin, className = 'map-marker-logo') {
 }
 
 /** Brand logo markup with initials fallback when image fails to load. */
-export function brandLogoHtml(brand, className = 'brand-logo', { large = false } = {}) {
+export function brandLogoHtml(brand, className = 'brand-logo', { large = false, srcOverride = '' } = {}) {
   const initials = escapeHtml((brand.name || '').slice(0, 2).toUpperCase() || '?');
   if (!brand.logo_path) {
     return `<div class="brand-logo-fallback${large ? ' lg' : ''}">${initials}</div>`;
   }
-  const src = fileUrl(brand.logo_path);
+  const src = srcOverride || fileUrl(brand.logo_path);
   const alt = escapeHtml(brand.name || '');
   const fbClass = `brand-logo-fallback${large ? ' lg' : ''} hidden`;
   return `<span class="brand-logo-wrap">

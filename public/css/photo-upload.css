@@ -22,7 +22,8 @@ body {
 .photo-upload-app {
   max-width: 480px;
   margin: 0 auto;
-  padding: 1.25rem 1rem 2rem;
+  padding: max(1.25rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(2rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
 }
 
 .photo-upload-header h1 {
@@ -60,6 +61,7 @@ body {
   font-weight: 600;
   cursor: pointer;
   border: none;
+  touch-action: manipulation;
 }
 
 .camera-btn {
@@ -112,6 +114,21 @@ body {
 
 .status.error { color: var(--danger); }
 .status.ok { color: var(--success); }
+
+.photo-upload-card h2 { margin: 0 0 0.75rem; }
+.pin-label { display: block; margin-bottom: 0.4rem; font-weight: 600; }
+.pin-input {
+  width: 100%;
+  min-height: var(--touch);
+  margin-bottom: 0.9rem;
+  padding: 0.75rem 0.9rem;
+  border: 2px solid #334155;
+  border-radius: 12px;
+  background: #0f172a;
+  color: var(--text);
+  font: inherit;
+}
+.pin-input:focus { outline: 3px solid rgba(77, 141, 255, 0.35); border-color: var(--accent); }
 
 .back-link {
   display: block;

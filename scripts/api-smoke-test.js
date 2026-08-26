@@ -220,6 +220,8 @@ async function main() {
       assert(!Object.prototype.hasOwnProperty.call(publicItem, privateField), `public QR leaked ${privateField}`);
     }
     console.log('✓ public QR payload excludes private inventory data');
+    const signedScanBeforeBackup = await api(base, `/items/${created.id}/scan-link`);
+    assert(signedScanBeforeBackup.accessToken, 'signed QR access token missing');
 
     const lookup = await api(base, '/lookup?code=SM57-88421');
     assert(lookup.item?.name, 'serial lookup failed');
@@ -343,6 +345,9 @@ async function main() {
     const restoredCal = restoredFloorplans.find(p => p.id === fp.id);
     assert(restoredCal?.wall_photos?.['0']?.calibrated === true, 'full backup restore lost wall calibration');
     assert(restoredCal?.items?.length >= 1, 'full backup restore lost wall placements');
+    const signedScanAfterRestore = await api(base, `/items/${created.id}/scan-link`);
+    assert(signedScanAfterRestore.accessToken === signedScanBeforeBackup.accessToken,
+      'full backup restore invalidated printed signed QR labels');
     console.log('✓ full backup export / restore');
 
     const invalidZip = new AdmZip(backupBuffer);

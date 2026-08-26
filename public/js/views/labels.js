@@ -114,7 +114,10 @@ export function getSelectedLabelItems(allItems) {
   return allItems.filter(i => ids.has(String(i.id)));
 }
 
-export function bindLabelsPageEvents({ items, onToast, onRefreshStatus }) {
+export function bindLabelsPageEvents({ items, onToast, onRefreshStatus, onGetScanUrl }) {
+  const resolveScanUrl = async (itemId, baseUrl) => onGetScanUrl
+    ? onGetScanUrl(itemId, baseUrl)
+    : getScanUrl(itemId, baseUrl);
   const persistSettings = () => saveLabelSettings(readLabelSettingsFromForm());
 
   ['label-studio-name', 'label-base-url', 'label-size', 'label-printer'].forEach(id => {
@@ -143,11 +146,9 @@ export function bindLabelsPageEvents({ items, onToast, onRefreshStatus }) {
 
     let printed = 0;
     for (const item of selected) {
-      const opts = {
-        ...settings,
-        scanUrl: getScanUrl(item.id, settings.baseUrl)
-      };
       try {
+        const scanUrl = await resolveScanUrl(item.id, settings.baseUrl);
+        const opts = { ...settings, scanUrl };
         if (useDymo) {
           await printOwnerLabel(item, opts);
         } else {
@@ -172,18 +173,17 @@ export function bindLabelsPageEvents({ items, onToast, onRefreshStatus }) {
       if (!item) return;
       const settings = readLabelSettingsFromForm();
       const panel = document.getElementById('label-preview-panel');
-      const url = getScanUrl(item.id, settings.baseUrl);
-      document.getElementById('label-preview-name').textContent = item.name;
-      document.getElementById('label-preview-url').textContent = `QR → ${url}`;
-      panel.classList.remove('hidden');
-
       const wrap = document.getElementById('label-preview-image-wrap');
-      wrap.innerHTML = '<p class="text-muted">Generating preview…</p>';
+      panel.classList.remove('hidden');
+      document.getElementById('label-preview-name').textContent = item.name;
+      wrap.innerHTML = '<p class="text-muted">Generating secure preview…</p>';
       try {
+        const url = await resolveScanUrl(item.id, settings.baseUrl);
+        document.getElementById('label-preview-url').textContent = `QR → ${url}`;
         const imgSrc = await renderLabelPreview(item, { ...settings, scanUrl: url });
         wrap.innerHTML = `<img src="${imgSrc}" alt="Label preview" class="label-preview-img">`;
-      } catch {
-        wrap.innerHTML = `<p class="text-muted">DYMO preview unavailable. QR will link to:<br><code>${escapeHtml(url)}</code></p>`;
+      } catch (err) {
+        wrap.innerHTML = `<p class="text-muted">Could not generate secure label preview: ${escapeHtml(err.message)}</p>`;
       }
     });
   });
@@ -193,24 +193,28 @@ export function bindLabelsPageEvents({ items, onToast, onRefreshStatus }) {
   }
 }
 
-export async function printSingleItemLabel(item, onToast) {
+export async function printSingleItemLabel(item, onToast, onGetScanUrl) {
   const settings = loadLabelSettings();
   try {
-    await printOwnerLabel(item, {
-      ...settings,
-      scanUrl: getScanUrl(item.id, settings.baseUrl)
-    });
-    onToast(`Label sent to DYMO for ${item.name}`, 'success');
-  } catch (err) {
-    onToast(err.message, 'error');
+    const scanUrl = onGetScanUrl
+      ? await onGetScanUrl(item.id, settings.baseUrl)
+      : getScanUrl(item.id, settings.baseUrl);
     try {
-      printLabelFallback(item, {
+      await printOwnerLabel(item, {
         ...settings,
-        scanUrl: getScanUrl(item.id, settings.baseUrl)
+        scanUrl
       });
-      onToast('Opened browser print fallback', 'info');
-    } catch (e2) {
-      onToast(e2.message, 'error');
+      onToast(`Label sent to DYMO for ${item.name}`, 'success');
+    } catch (err) {
+      onToast(err.message, 'error');
+      try {
+        printLabelFallback(item, { ...settings, scanUrl });
+        onToast('Opened browser print fallback', 'info');
+      } catch (fallbackError) {
+        onToast(fallbackError.message, 'error');
+      }
     }
+  } catch (err) {
+    onToast(`Could not create secure QR link: ${err.message}`, 'error');
   }
 }

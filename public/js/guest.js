@@ -7,6 +7,11 @@ const subtitle = document.getElementById('guest-subtitle');
 
 const API = `/api/guest/${encodeURIComponent(token)}`;
 
+function guestFileUrl(relativePath) {
+  const encoded = String(relativePath || '').split('/').map(encodeURIComponent).join('/');
+  return `/uploads/${encoded}?guest_token=${encodeURIComponent(token)}`;
+}
+
 async function api(path) {
   const res = await fetch(`${API}${path}`);
   if (!res.ok) {
@@ -56,7 +61,7 @@ function showDetail(item) {
   el.innerHTML = `
     <h3>${escapeHtml(item.name)}</h3>
     <p class="text-muted">${escapeHtml(item.brand)} ${escapeHtml(item.model)} · ${escapeHtml(item.category)}</p>
-    ${photo ? `<img src="/uploads/${photo.relative_path}" alt="" style="max-width:320px;border-radius:8px;margin:1rem 0">` : ''}
+    ${photo ? `<img src="${guestFileUrl(photo.relative_path)}" alt="" style="max-width:320px;border-radius:8px;margin:1rem 0">` : ''}
     <div class="detail-grid">
       <div class="detail-field"><div class="field-label">Serial</div><div class="field-value">${escapeHtml(item.serial_number) || '—'}</div></div>
       <div class="detail-field"><div class="field-label">Location</div><div class="field-value">${escapeHtml(item.location) || '—'}</div></div>

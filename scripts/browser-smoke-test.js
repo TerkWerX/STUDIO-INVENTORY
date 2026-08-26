@@ -2,7 +2,7 @@
  * Playwright browser smoke test — key UI flows (v1.5 / v1.6).
  * Requires: npm install && npx playwright install chromium
  */
-const { chromium } = require('playwright');
+const playwrightBrowsers = require('playwright');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -11,6 +11,7 @@ const ROOT = path.join(__dirname, '..');
 const PORT = process.env.BROWSER_SMOKE_PORT || 3853;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DATA_DIR = path.join(ROOT, 'data', '.browser-smoke-test');
+const BROWSER_ENGINE = process.env.BROWSER_ENGINE || 'chromium';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -61,7 +62,9 @@ async function main() {
   }
 
   const server = await seedAndStartServer();
-  const browser = await chromium.launch({ headless: true });
+  const browserType = playwrightBrowsers[BROWSER_ENGINE];
+  if (!browserType) throw new Error(`Unsupported BROWSER_ENGINE: ${BROWSER_ENGINE}`);
+  const browser = await browserType.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
   try {
@@ -241,6 +244,43 @@ async function main() {
     });
     assert(typeof stats.activeLoanCount === 'number', 'stats missing activeLoanCount');
     console.log('✓ in-page API reachable');
+
+    const firstItemId = await page.evaluate(async () => {
+      const items = await fetch('/api/items?sort=name').then(r => r.json());
+      return items[0]?.id;
+    });
+    assert(firstItemId, 'mobile test item missing');
+
+    await page.setViewportSize({ width: 412, height: 915 });
+    await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.page-title', { timeout: 20000 });
+    assert(await page.locator('#mobile-menu-toggle').isVisible(), 'phone menu button is not visible');
+    assert(!(await page.locator('#main-navigation').isVisible()), 'phone navigation should start collapsed');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'phone layout overflows horizontally');
+    await page.click('#mobile-menu-toggle');
+    assert(await page.locator('#main-navigation').isVisible(), 'phone menu did not open');
+    await page.click('.nav-btn[data-view="scan"]');
+    await page.waitForSelector('#scan-photo-input', { state: 'attached' });
+    assert(await page.getAttribute('#scan-photo-input', 'capture') === 'environment', 'scan photo input does not prefer rear camera');
+    assert(!(await page.locator('#main-navigation').isVisible()), 'phone menu did not close after navigation');
+
+    await page.goto(`${BASE}/photo-upload.html?id=${firstItemId}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#upload-card:not(.hidden)', { timeout: 10000 });
+    assert(await page.getAttribute('#camera-input', 'capture') === 'environment', 'phone photo upload does not prefer rear camera');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'phone upload layout overflows horizontally');
+
+    await page.setViewportSize({ width: 800, height: 1280 });
+    await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.page-title', { timeout: 20000 });
+    assert(await page.locator('#mobile-menu-toggle').isVisible(), 'portrait tablet should use compact navigation');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'portrait tablet layout overflows');
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.page-title', { timeout: 20000 });
+    assert(!(await page.locator('#mobile-menu-toggle').isVisible()), 'landscape tablet should use desktop navigation');
+    assert(await page.locator('#main-navigation').isVisible(), 'landscape tablet navigation is hidden');
+    console.log('✓ phone and tablet responsive layouts');
 
     console.log('\nBrowser smoke test passed.');
   } finally {

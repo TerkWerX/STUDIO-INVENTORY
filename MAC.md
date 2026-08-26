@@ -170,7 +170,13 @@ Great for scanning QR labels on gear without walking back to the Mac.
    - In Terminal: `ipconfig getifaddr en0`
 3. On your phone, open Safari and go to: `http://192.168.x.x:3847` (use your Mac’s IP)
 
-In **Owner Labels**, set **QR Base URL** to that same address so printed QR codes work from your phone.
+4. Enter the owner PIN when Safari asks. The Mac must set the PIN first under **Backup & Restore**.
+
+In **Owner Labels**, set **QR Base URL** to that same address so printed QR codes work from your phone. v2.6.0 QR labels are signed; reprint labels created by older releases.
+
+Safari supports the phone/tablet photo page and the **Take a Label Photo** scanning fallback. Continuous live camera barcode detection requires HTTPS and compatible browser support, so it is not expected on the normal `http://` LAN link. The native iPhone/iPad Camera app can still scan Studio Inventory QR labels directly.
+
+Keep port `3847` limited to a trusted local network. The owner PIN prevents casual LAN access, but the normal HTTP connection is not encrypted and should never be exposed directly to the internet.
 
 ---
 

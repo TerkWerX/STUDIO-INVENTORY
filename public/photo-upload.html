@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#0f1419">
   <title>Add Photos — Studio Inventory</title>
   <link rel="stylesheet" href="/css/photo-upload.css">
@@ -14,7 +14,16 @@
       <p id="item-name" class="item-name">Loading…</p>
     </header>
 
-    <section class="photo-upload-card" id="upload-card">
+    <form class="photo-upload-card hidden" id="auth-card">
+      <h2>Owner PIN Required</h2>
+      <p class="hint">Enter the Studio Inventory owner PIN once to add photos from this device.</p>
+      <label class="pin-label" for="owner-pin">Owner PIN</label>
+      <input type="password" id="owner-pin" class="pin-input" autocomplete="current-password" spellcheck="false" required>
+      <button type="submit" class="upload-btn" id="unlock-btn">Unlock Photo Upload</button>
+      <p id="auth-status" class="status" role="status"></p>
+    </form>
+
+    <section class="photo-upload-card hidden" id="upload-card">
       <p class="hint">Take or choose photos on your phone. They upload directly to your studio computer on the same Wi‑Fi.</p>
 
       <label class="camera-btn">

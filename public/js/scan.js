@@ -1,10 +1,19 @@
 import { escapeHtml, formatCurrency, formatDate, fileUrl, brandLogoHtml } from './utils.js';
 
 const root = document.getElementById('scan-root');
-const itemId = new URLSearchParams(window.location.search).get('id');
+const params = new URLSearchParams(window.location.search);
+const itemId = params.get('id');
+const accessToken = params.get('access') || '';
+
+function protectedFileUrl(relativePath) {
+  const base = fileUrl(relativePath);
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}item=${encodeURIComponent(itemId)}&access=${encodeURIComponent(accessToken)}`;
+}
 
 async function loadItem(id) {
-  const res = await fetch(`/api/public/items/${encodeURIComponent(id)}`);
+  const qs = accessToken ? `?access=${encodeURIComponent(accessToken)}` : '';
+  const res = await fetch(`/api/public/items/${encodeURIComponent(id)}${qs}`);
   if (!res.ok) throw new Error(res.status === 404 ? 'Item not found' : 'Could not load item');
   return res.json();
 }
@@ -18,7 +27,11 @@ function renderItem(item) {
 
   const brandBanner = item.brand ? `
     <div class="scan-brand-banner">
-      ${brandLogoHtml({ name: item.brand, logo_path: item.brand_logo_path }, 'scan-brand-logo', { large: true })}
+      ${brandLogoHtml(
+        { name: item.brand, logo_path: item.brand_logo_path },
+        'scan-brand-logo',
+        { large: true, srcOverride: protectedFileUrl(item.brand_logo_path) }
+      )}
       <div>
         <span class="scan-brand-label">Manufacturer</span>
         <strong>${escapeHtml(item.brand)}</strong>
@@ -30,7 +43,7 @@ function renderItem(item) {
   return `
     <article class="scan-card">
       ${brandBanner}
-      ${photo ? `<div class="scan-photo"><img src="${fileUrl(photo.relative_path)}" alt=""></div>` : ''}
+      ${photo ? `<div class="scan-photo"><img src="${protectedFileUrl(photo.relative_path)}" alt=""></div>` : ''}
       <div class="scan-card-body">
         <h1 class="scan-title">${escapeHtml(item.name)}</h1>
         ${item.common_name ? `<p class="scan-subtitle">${escapeHtml(item.common_name)}</p>` : ''}
@@ -62,7 +75,7 @@ function renderItem(item) {
         <ul class="scan-link-list">
           ${manuals.map(m => `
             <li>
-              <a href="${fileUrl(m.relative_path)}" target="_blank" rel="noopener" class="scan-file-link">
+              <a href="${protectedFileUrl(m.relative_path)}" target="_blank" rel="noopener" class="scan-file-link">
                 <span class="scan-file-icon">📄</span>
                 <span>
                   <strong>${escapeHtml(m.original_name)}</strong>
@@ -81,7 +94,7 @@ function renderItem(item) {
         <ul class="scan-link-list">
           ${software.map(s => `
             <li>
-              <a href="${fileUrl(s.relative_path)}" download class="scan-file-link">
+              <a href="${protectedFileUrl(s.relative_path)}" download class="scan-file-link">
                 <span class="scan-file-icon">💾</span>
                 <span>
                   <strong>${escapeHtml(s.original_name)}</strong>

@@ -2,27 +2,20 @@ const API = '/api';
 const OWNER_TOKEN_KEY = 'studio-owner-token';
 
 function ownerToken() {
-  return localStorage.getItem(OWNER_TOKEN_KEY) || '';
+  // v2.6+ uses an HttpOnly same-site cookie so scripts cannot read the session.
+  return '';
 }
 
-function setOwnerToken(token) {
-  if (token) localStorage.setItem(OWNER_TOKEN_KEY, token);
-  else localStorage.removeItem(OWNER_TOKEN_KEY);
+function setOwnerToken() {
+  localStorage.removeItem(OWNER_TOKEN_KEY);
 }
 
 function withOwnerHeaders(options = {}) {
-  const token = ownerToken();
-  if (!token) return options;
-  const headers = new Headers(options.headers || {});
-  headers.set('X-Studio-Owner-Token', token);
-  return { ...options, headers };
+  return options;
 }
 
 function downloadUrl(path) {
-  const token = ownerToken();
-  if (!token) return `${API}${path}`;
-  const sep = path.includes('?') ? '&' : '?';
-  return `${API}${path}${sep}owner_token=${encodeURIComponent(token)}`;
+  return `${API}${path}`;
 }
 
 async function request(path, options = {}) {
@@ -49,7 +42,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin })
     });
-    setOwnerToken(result.token);
+    setOwnerToken();
     return result;
   },
   ownerLogin: async (pin) => {
@@ -58,7 +51,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin })
     });
-    setOwnerToken(result.token);
+    setOwnerToken();
     return result;
   },
   updateCheck: () => request('/update-check'),
@@ -69,6 +62,8 @@ export const api = {
     return request(`/items${qs ? '?' + qs : ''}`);
   },
   item: (id) => request(`/items/${id}`),
+  scanLink: (id, baseUrl = '') => request(`/items/${id}/scan-link${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`),
+  photoLink: (id, baseUrl = '') => request(`/items/${id}/photo-link${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`),
   createItem: (data) => request('/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   updateItem: (id, data) => request(`/items/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   deleteItem: (id) => request(`/items/${id}`, { method: 'DELETE' }),

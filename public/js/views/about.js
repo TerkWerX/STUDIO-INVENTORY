@@ -141,7 +141,7 @@ export function renderBackup(guest = {}, ownerAuth = {}) {
     <div class="card">
       <h3 class="section-title">Owner Access on Wi-Fi</h3>
       <p class="text-muted-sm" style="margin-bottom:1rem">
-        Localhost access on this studio computer stays unlocked. Browser sessions from other devices on the same Wi-Fi require an owner PIN before they can edit inventory, backups, manuals, or wall placements.
+        Localhost access on this studio computer stays unlocked. Browser sessions from other devices on the same Wi-Fi require a 6-character-or-longer owner PIN before they can edit inventory, upload photos, open backups, or change wall placements. Incorrect remote attempts are rate-limited.
       </p>
       <div class="btn-group">
         <button type="button" class="btn btn-secondary" id="owner-pin-set" ${isLocal ? '' : 'disabled'}>${pinSet ? 'Change Owner PIN' : 'Set Owner PIN'}</button>

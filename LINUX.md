@@ -54,7 +54,9 @@ The server listens on port `3847`. From another device on the same trusted netwo
 http://<linux-computer-ip>:3847
 ```
 
-Set an owner PIN under **Backup & Restore** before using remote administrative access. If a firewall is enabled, allow TCP port `3847` only on trusted local networks.
+Set an owner PIN of at least 6 characters under **Backup & Restore** before using remote administrative access. Android Chrome/Edge and iPad Safari can use the photo-capture and label-photo flows. Live barcode video requires HTTPS; use **Take a Label Photo** on the normal HTTP LAN address.
+
+If a firewall is enabled, allow TCP port `3847` only on trusted local networks. Do not forward the port to the internet: the owner PIN protects access, but the default HTTP connection is not encrypted.
 
 ## Developer installation
 

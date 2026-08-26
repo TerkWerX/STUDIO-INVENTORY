@@ -16,14 +16,22 @@ export function renderScanLookup() {
 
     <div class="card scan-lookup-card">
       <div class="card-header">
-        <h3 class="section-title">Camera Scan</h3>
+        <h3 class="section-title">Live Camera Scan</h3>
         <button type="button" class="btn btn-secondary btn-sm" id="scan-camera-toggle">Start Camera</button>
       </div>
-      <p class="text-muted-sm" id="scan-camera-hint">Uses your device camera for QR codes and barcodes (Chrome / Edge recommended).</p>
+      <p class="text-muted-sm" id="scan-camera-hint">Available when the page is opened through HTTPS and the browser supports barcode detection.</p>
       <div id="scan-camera-wrap" class="scan-camera-wrap hidden">
         <video id="scan-camera-video" class="scan-camera-video" playsinline muted></video>
         <canvas id="scan-camera-canvas" class="hidden" hidden></canvas>
       </div>
+    </div>
+
+    <div class="card scan-lookup-card">
+      <h3 class="section-title">Take a Label Photo</h3>
+      <p class="text-muted-sm">Works on Android Chrome, iPhone/iPad Safari, and Edge—even on a local HTTP connection. Photograph the serial or model label clearly.</p>
+      <label class="btn btn-secondary scan-photo-label" for="scan-photo-input">Take or Choose Photo</label>
+      <input type="file" id="scan-photo-input" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" hidden>
+      <p class="text-muted-sm scan-photo-status" id="scan-photo-status" role="status"></p>
     </div>
 
     <div id="scan-results" class="scan-results hidden"></div>
@@ -70,8 +78,16 @@ export function renderScanResult(result) {
 }
 
 export async function startCameraScan(onCode, onError) {
+  if (!window.isSecureContext) {
+    onError('Live camera scanning requires HTTPS. Use “Take a Label Photo” instead on this local-network link.');
+    return null;
+  }
   if (!('BarcodeDetector' in window)) {
-    onError('Camera barcode scanning needs Chrome or Edge. USB scanner and manual entry still work.');
+    onError('This browser does not provide live barcode detection. Use “Take a Label Photo” instead.');
+    return null;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    onError('Camera access is unavailable here. Use “Take a Label Photo” instead.');
     return null;
   }
 

@@ -331,10 +331,11 @@ export function renderItemDetail(item) {
       </div>
       <p class="text-muted-sm">On the same Wi‑Fi, scan this QR with your iPhone or Android to snap photos at the rack — they upload straight to this item.</p>
       <div class="phone-upload-row">
-        <img class="phone-upload-qr" src="/api/items/${item.id}/photo-qr" width="160" height="160" alt="QR code for phone photo upload">
+        <img class="phone-upload-qr" data-phone-upload-qr src="/api/items/${item.id}/photo-qr" width="160" height="160" alt="QR code for phone photo upload">
         <div class="phone-upload-links">
-          <a href="/photo-upload.html?id=${item.id}" target="_blank" rel="noopener" class="btn btn-secondary">Open Phone Upload Page</a>
-          <p class="text-muted-sm phone-upload-url"><code>${escapeHtml(`${window.location.origin}/photo-upload.html?id=${item.id}`)}</code></p>
+          <a href="/photo-upload.html?id=${item.id}" data-phone-upload-link target="_blank" rel="noopener" class="btn btn-secondary">Open Phone Upload Page</a>
+          <p class="text-muted-sm phone-upload-url"><code data-phone-upload-url>Preparing secure phone link…</code></p>
+          <p class="text-muted-sm">The phone or tablet will ask for the owner PIN once, then remember that browser.</p>
         </div>
       </div>
     </div>

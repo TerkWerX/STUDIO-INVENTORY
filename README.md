@@ -108,6 +108,14 @@ Open **http://localhost:3847** — press **F11** (or **Cmd+Ctrl+F** on Mac) for 
 
 From another device on your network: `http://<your-computer-ip>:3847`
 
+Before remote use, open **Backup & Restore** on the studio computer and set an owner PIN of at least 6 characters. Phones and tablets must unlock once per browser. Sessions are kept separately, so signing in on an iPad does not sign an Android tablet out.
+
+### Phone and tablet support
+
+- **Android Chrome / Edge:** full inventory editing and photo capture are supported. Live barcode video is available only when the page is served through HTTPS; on the normal LAN `http://` address, use **Take a Label Photo** or the device's native QR scanner.
+- **iPhone / iPad Safari:** full inventory editing, signed QR item pages, and **Take Photo / Choose from Gallery** are supported. Use **Take a Label Photo** for serial/model recognition.
+- **Security:** remote APIs and uploaded files require the owner session, guest token, or a signed single-item QR link. Incorrect PIN attempts are rate-limited. Do not forward port `3847` to the internet; plain HTTP LAN traffic is not encrypted, so use only a trusted WPA2/WPA3 network or place the app behind trusted HTTPS/VPN access.
+
 ---
 
 ## Manual Finder + Manual Inbox
@@ -242,13 +250,15 @@ Your database and uploads are **local only** and excluded from git. Back them up
 
 ## Owner Labels (QR + DYMO)
 
-Print owner labels with QR codes for each piece of gear. Scanning with any phone opens a quick page with manuals, archived software, full details, and an edit link.
+Print owner labels with signed QR codes for each piece of gear. Scanning with any phone opens a quick page for that item without exposing the rest of the inventory.
 
 1. Install **DYMO Connect** and connect your LabelWriter 450 Turbo
 2. Open **Owner Labels** in the sidebar
 3. Set **QR Base URL** to your NUC's LAN IP (e.g. `http://192.168.1.50:3847`) so phones on Wi‑Fi can reach the server
 4. Select items → **Print Selected (DYMO)** (30252 address labels recommended)
 5. Affix labels to gear
+
+Labels printed before v2.6.0 do not contain the new access signature and must be reprinted before remote phone scans will open them.
 
 **Browser fallback:** Use **Print Selected (Browser)** if DYMO Connect isn't detected — choose your label printer in the system print dialog (Windows or Mac).
 

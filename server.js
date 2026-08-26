@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const multer = require('multer');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
@@ -28,7 +29,8 @@ const { summarizeCompleteness, computeItemCompleteness } = require('./lib/comple
 const { parseCsv, mapRowToItem } = require('./lib/csv-import');
 const {
   readSettings, writeSettings, regenerateGuestToken, isValidGuestToken,
-  setOwnerPin, verifyOwnerPin, rotateOwnerSessionToken, ownerPinConfigured
+  setOwnerPin, verifyOwnerPin, createOwnerSessionToken, revokeOwnerSessionToken,
+  isValidOwnerSessionToken, itemScanToken, isValidItemScanToken, ownerPinConfigured
 } = require('./lib/studio-settings');
 const { indexManualAttachment, searchManuals, pdfParseAvailable } = require('./lib/pdf-index');
 const { fetchBrandLogoFromWeb, fetchAllInventoryBrandLogos } = require('./lib/fetch-brand-logo');
@@ -42,23 +44,44 @@ const FLOORPLANS_DIR = path.join(UPLOADS_DIR, 'floorplans');
 const MANUAL_INBOX_DIR = path.join(DATA_DIR, 'manual-inbox');
 const OCR_DATA_DIR = path.join(__dirname, 'ocr');
 const OCR_CACHE_DIR = path.join(DATA_DIR, 'ocr-cache');
+const LOGIN_ATTEMPT_LIMIT = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 initSchema();
 if (!fs.existsSync(FLOORPLANS_DIR)) fs.mkdirSync(FLOORPLANS_DIR, { recursive: true });
 if (!fs.existsSync(MANUAL_INBOX_DIR)) fs.mkdirSync(MANUAL_INBOX_DIR, { recursive: true });
 if (!fs.existsSync(OCR_CACHE_DIR)) fs.mkdirSync(OCR_CACHE_DIR, { recursive: true });
 
+const IMAGE_EXTENSIONS = new Map([
+  ['image/jpeg', '.jpg'],
+  ['image/png', '.png'],
+  ['image/webp', '.webp'],
+  ['image/gif', '.gif'],
+  ['image/heic', '.heic'],
+  ['image/heif', '.heif']
+]);
+
+function imageExtension(file, { allowSvg = false } = {}) {
+  const mime = String(file?.mimetype || '').toLowerCase().split(';')[0];
+  if (allowSvg && mime === 'image/svg+xml') return '.svg';
+  return IMAGE_EXTENSIONS.get(mime) || '';
+}
+
+function isAcceptedImage(file, options) {
+  return !!imageExtension(file, options);
+}
+
 const softwareScreenshotUpload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => cb(null, softwareLicenseDir(req.params.id)),
     filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      const ext = imageExtension(file) || '.jpg';
       cb(null, `screenshot-${Date.now()}${ext}`);
     }
   }),
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    cb(null, file.mimetype.startsWith('image/'));
+    cb(null, isAcceptedImage(file));
   }
 });
 syncBrandsFromItems();
@@ -71,18 +94,45 @@ setTimeout(() => {
 }, 2500);
 
 const app = express();
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(self)');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
+  next();
+});
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', (req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  next();
-}, express.static(UPLOADS_DIR, { maxAge: '7d' }));
+  res.setHeader('Cache-Control', 'private, max-age=604800');
+  if (isLocalRequest(req) || isValidOwnerToken(ownerTokenFromRequest(req))) return next();
+  if (isValidGuestToken(req.query.guest_token)) return next();
+
+  const match = req.path.match(/^\/(photos|manuals|software|receipts|wall-photos)\/(\d+)\//);
+  const itemId = req.query.item || match?.[2];
+  const scanAllowedPath = !!match || req.path.startsWith('/logos/');
+  if (scanAllowedPath && itemId && isValidItemScanToken(itemId, req.query.access)) return next();
+
+  return res.status(401).json({ error: 'Authentication or a valid share link is required.' });
+}, express.static(UPLOADS_DIR, {
+  maxAge: '7d',
+  dotfiles: 'deny',
+  setHeaders: (res, filePath) => {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.svg') res.setHeader('Content-Security-Policy', 'sandbox');
+    if (!['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif', '.svg', '.pdf'].includes(ext)) {
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath).replace(/["\r\n]/g, '_')}"`);
+    }
+  }
+}));
 
 function safeFilename(name) {
   return String(name).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 }
 
-function makeUploadStorage(type) {
+function makeUploadStorage(type, options = {}) {
   return multer.diskStorage({
     destination: (req, _file, cb) => {
       const itemId = req.params.id;
@@ -90,7 +140,11 @@ function makeUploadStorage(type) {
       cb(null, dir);
     },
     filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase();
+      const ext = typeof options.extension === 'function'
+        ? options.extension(file)
+        : options.imageOnly
+          ? imageExtension(file, { allowSvg: !!options.allowSvg })
+          : path.extname(file.originalname).toLowerCase();
       cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
     }
   });
@@ -98,7 +152,7 @@ function makeUploadStorage(type) {
 
 function createUploader(type, options = {}) {
   return multer({
-    storage: makeUploadStorage(type),
+    storage: makeUploadStorage(type, options),
     limits: { fileSize: options.maxSize || MAX_FILE_SIZE },
     fileFilter: (_req, file, cb) => {
       if (options.filter) return options.filter(file, cb);
@@ -109,26 +163,34 @@ function createUploader(type, options = {}) {
 
 const photoUpload = createUploader('photo', {
   maxSize: 25 * 1024 * 1024,
+  imageOnly: true,
   filter: (file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
+    if (isAcceptedImage(file)) cb(null, true);
     else cb(new Error('Only image files allowed for photos'));
   }
 });
 
 const manualUpload = createUploader('manual', {
   maxSize: 50 * 1024 * 1024,
+  extension: (file) => ({
+    'application/pdf': '.pdf',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'text/plain': '.txt'
+  })[file.mimetype] || imageExtension(file),
   filter: (file, cb) => {
     const ok = ['application/pdf', 'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'text/plain'].includes(file.mimetype) || file.mimetype.startsWith('image/');
+      'text/plain'].includes(file.mimetype) || isAcceptedImage(file);
     cb(null, ok);
   }
 });
 
 const receiptUpload = createUploader('receipt', {
   maxSize: 25 * 1024 * 1024,
+  extension: (file) => file.mimetype === 'application/pdf' ? '.pdf' : imageExtension(file),
   filter: (file, cb) => {
-    const ok = file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/');
+    const ok = file.mimetype === 'application/pdf' || isAcceptedImage(file);
     cb(null, ok);
   }
 });
@@ -139,14 +201,13 @@ const wallPhotoUpload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => cb(null, wallPhotoDir(req.params.id)),
     filename: (_req, file, cb) => {
-      const ext = ['.png', '.webp', '.jpg', '.jpeg'].includes(path.extname(file.originalname).toLowerCase())
-        ? path.extname(file.originalname).toLowerCase() : '.png';
+      const ext = imageExtension(file) || '.png';
       cb(null, `wall-${Date.now()}${ext}`);
     }
   }),
   limits: { fileSize: 12 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    cb(null, file.mimetype.startsWith('image/'));
+    cb(null, isAcceptedImage(file));
   }
 });
 
@@ -154,13 +215,13 @@ const wallBackgroundUpload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => cb(null, floorplanWallPhotosDir(req.params.id)),
     filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      const ext = imageExtension(file) || '.jpg';
       cb(null, `wall-${req.params.edge}-${Date.now()}${ext}`);
     }
   }),
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    cb(null, file.mimetype.startsWith('image/'));
+    cb(null, isAcceptedImage(file));
   }
 });
 
@@ -168,13 +229,13 @@ const floorplanUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, FLOORPLANS_DIR),
     filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      const ext = imageExtension(file) || '.jpg';
       cb(null, `fp-${req.params.id}-${Date.now()}${ext}`);
     }
   }),
   limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    cb(null, file.mimetype.startsWith('image/'));
+    cb(null, isAcceptedImage(file));
   }
 });
 
@@ -184,14 +245,13 @@ const logoUpload = multer({
     filename: (req, file, cb) => {
       const name = req.body.name || req.params.name || 'custom';
       const slug = brandSlug(name);
-      const ext = ['.png', '.svg', '.webp', '.jpg', '.jpeg'].includes(path.extname(file.originalname).toLowerCase())
-        ? path.extname(file.originalname).toLowerCase() : '.png';
+      const ext = imageExtension(file, { allowSvg: true }) || '.png';
       cb(null, `${slug}${ext}`);
     }
   }),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
+    if (isAcceptedImage(file, { allowSvg: true })) cb(null, true);
     else cb(new Error('Logo must be an image (PNG, SVG, WebP)'));
   }
 });
@@ -213,7 +273,7 @@ const labelScanUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    cb(null, file.mimetype.startsWith('image/'));
+    cb(null, isAcceptedImage(file));
   }
 });
 
@@ -650,22 +710,74 @@ function parseLabelScanText(text) {
 // --- API ---
 
 function requestBaseUrl(req) {
-  const host = req.get('x-forwarded-host') || req.get('host');
-  const proto = req.get('x-forwarded-proto') || req.protocol;
-  return `${proto}://${host}`;
+  return `${req.protocol}://${req.get('host')}`;
 }
 
-app.get('/api/health', (_req, res) => {
-  res.json({
+function normalizedBaseUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) return '';
+    return parsed.origin;
+  } catch {
+    return '';
+  }
+}
+
+function isLoopbackHostname(hostname) {
+  return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(String(hostname || '').toLowerCase());
+}
+
+function preferredLanBaseUrl(req) {
+  const port = Number(req.socket?.localPort || PORT);
+  const candidates = Object.entries(os.networkInterfaces())
+    .flatMap(([name, entries]) => (entries || []).map(entry => ({ name, ...entry })))
+    .filter(entry => entry.family === 'IPv4' && !entry.internal && !entry.address.startsWith('169.254.'))
+    .sort((a, b) => {
+      const virtual = /virtual|vmware|vbox|docker|wsl|hyper-v|vethernet/i;
+      return Number(virtual.test(a.name)) - Number(virtual.test(b.name));
+    });
+  const chosen = candidates[0];
+  return chosen ? `${req.protocol}://${chosen.address}:${port}` : requestBaseUrl(req);
+}
+
+function shareBaseUrl(req, requested) {
+  const normalized = normalizedBaseUrl(requested);
+  if (!normalized) {
+    const current = normalizedBaseUrl(requestBaseUrl(req));
+    try {
+      return isLoopbackHostname(new URL(current).hostname) ? preferredLanBaseUrl(req) : current;
+    } catch {
+      return preferredLanBaseUrl(req);
+    }
+  }
+  return isLoopbackHostname(new URL(normalized).hostname) ? preferredLanBaseUrl(req) : normalized;
+}
+
+function scanUrlForItem(req, itemId, requestedBase = '') {
+  const base = shareBaseUrl(req, requestedBase);
+  return `${base}/scan/${encodeURIComponent(itemId)}?access=${encodeURIComponent(itemScanToken(itemId))}`;
+}
+
+app.get('/api/health', (req, res) => {
+  const local = isLocalRequest(req);
+  const authenticated = local || isValidOwnerToken(ownerTokenFromRequest(req));
+  const payload = {
     ok: true,
-    version: getCurrentVersion(),
-    itemCount: db.prepare('SELECT COUNT(*) as c FROM items').get().c,
-    dbPath: DB_PATH,
-    appRoot: __dirname.replace(/\\/g, '/')
-  });
+    version: getCurrentVersion()
+  };
+  if (authenticated) payload.itemCount = db.prepare('SELECT COUNT(*) as c FROM items').get().c;
+  if (local) {
+    payload.dbPath = DB_PATH;
+    payload.appRoot = __dirname.replace(/\\/g, '/');
+    payload.lanUrl = preferredLanBaseUrl(req);
+  }
+  res.json(payload);
 });
 
-app.get('/api/update-check', async (_req, res) => {
+app.get('/api/update-check', async (req, res) => {
+  if (!isLocalRequest(req) && !isValidOwnerToken(ownerTokenFromRequest(req))) {
+    return res.status(401).json({ error: 'Owner PIN required for update checks.' });
+  }
   res.json(await checkForUpdate());
 });
 
@@ -689,23 +801,68 @@ function parseCookies(header = '') {
 }
 
 function ownerTokenFromRequest(req) {
-  return req.get('x-studio-owner-token')
-    || req.query.owner_token
-    || parseCookies(req.get('cookie')).studio_owner_token
-    || '';
+  return parseCookies(req.get('cookie')).studio_owner_token || '';
 }
 
 function isValidOwnerToken(token) {
-  const s = readSettings();
-  if (!s.ownerSessionToken || !token) return false;
-  const actual = Buffer.from(String(s.ownerSessionToken));
-  const expected = Buffer.from(String(token));
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  return isValidOwnerSessionToken(token);
 }
 
-function sendOwnerCookie(res, token) {
-  res.setHeader('Set-Cookie', `studio_owner_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}`);
+function ownerCookie(req, token, maxAge) {
+  const parts = [
+    `studio_owner_token=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+    `Max-Age=${maxAge}`
+  ];
+  if (req.secure) parts.push('Secure');
+  return parts.join('; ');
 }
+
+function sendOwnerCookie(req, res, token) {
+  res.setHeader('Set-Cookie', ownerCookie(req, token, 60 * 60 * 24 * 30));
+}
+
+const loginAttempts = new Map();
+
+function loginAttemptKey(req) {
+  return String(req.socket?.remoteAddress || req.ip || 'unknown');
+}
+
+function loginAttemptState(req) {
+  const key = loginAttemptKey(req);
+  const now = Date.now();
+  let state = loginAttempts.get(key);
+  if (!state || now - state.startedAt >= LOGIN_WINDOW_MS) {
+    state = { startedAt: now, failures: 0 };
+    loginAttempts.set(key, state);
+  }
+  return { key, state, now };
+}
+
+function loginRateLimited(req, res) {
+  if (isLocalRequest(req)) return false;
+  const { state, now } = loginAttemptState(req);
+  if (state.failures < LOGIN_ATTEMPT_LIMIT) return false;
+  const retrySeconds = Math.max(1, Math.ceil((LOGIN_WINDOW_MS - (now - state.startedAt)) / 1000));
+  res.setHeader('Retry-After', String(retrySeconds));
+  res.status(429).json({ error: 'Too many incorrect PIN attempts. Try again later.' });
+  return true;
+}
+
+app.use('/api', (req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || isLocalRequest(req)) return next();
+  const fetchSite = String(req.get('sec-fetch-site') || '').toLowerCase();
+  if (fetchSite === 'cross-site') {
+    return res.status(403).json({ error: 'Cross-site requests are not allowed.' });
+  }
+  const origin = req.get('origin');
+  if (origin && normalizedBaseUrl(origin) !== normalizedBaseUrl(requestBaseUrl(req))) {
+    return res.status(403).json({ error: 'Request origin does not match this Studio Inventory server.' });
+  }
+  next();
+});
 
 app.get('/api/auth/status', (req, res) => {
   const local = isLocalRequest(req);
@@ -723,9 +880,10 @@ app.post('/api/auth/setup', (req, res) => {
     return res.status(403).json({ error: 'Owner PIN setup must be done on the studio computer.' });
   }
   try {
-    const s = setOwnerPin(req.body?.pin);
-    sendOwnerCookie(res, s.ownerSessionToken);
-    res.json({ ok: true, ownerPinSet: true, token: s.ownerSessionToken });
+    setOwnerPin(req.body?.pin);
+    const token = createOwnerSessionToken();
+    sendOwnerCookie(req, res, token);
+    res.json({ ok: true, ownerPinSet: true });
   } catch (err) {
     res.status(400).json({ error: err.message || 'Could not set owner PIN' });
   }
@@ -735,17 +893,26 @@ app.post('/api/auth/login', (req, res) => {
   if (!ownerPinConfigured()) {
     return res.status(403).json({ error: 'Open Studio Inventory on the studio computer first and set an owner PIN.' });
   }
+  if (loginRateLimited(req, res)) return;
   if (!verifyOwnerPin(req.body?.pin)) {
+    const attempt = loginAttemptState(req);
+    attempt.state.failures += 1;
+    loginAttempts.set(attempt.key, attempt.state);
+    if (attempt.state.failures >= LOGIN_ATTEMPT_LIMIT) {
+      res.setHeader('Retry-After', String(Math.ceil(LOGIN_WINDOW_MS / 1000)));
+      return res.status(429).json({ error: 'Too many incorrect PIN attempts. Try again in 15 minutes.' });
+    }
     return res.status(401).json({ error: 'Incorrect owner PIN' });
   }
-  const s = rotateOwnerSessionToken();
-  sendOwnerCookie(res, s.ownerSessionToken);
-  res.json({ ok: true, token: s.ownerSessionToken });
+  loginAttempts.delete(loginAttemptKey(req));
+  const token = createOwnerSessionToken();
+  sendOwnerCookie(req, res, token);
+  res.json({ ok: true });
 });
 
-app.post('/api/auth/logout', (_req, res) => {
-  rotateOwnerSessionToken();
-  res.setHeader('Set-Cookie', 'studio_owner_token=; Path=/; SameSite=Lax; Max-Age=0');
+app.post('/api/auth/logout', (req, res) => {
+  revokeOwnerSessionToken(ownerTokenFromRequest(req));
+  res.setHeader('Set-Cookie', ownerCookie(req, '', 0));
   res.json({ ok: true });
 });
 
@@ -753,7 +920,7 @@ function ownerMiddleware(req, res, next) {
   if (req.path.startsWith('/guest/')) return next();
   if (req.path.startsWith('/public/')) return next();
   if (req.path.startsWith('/auth/')) return next();
-  if (req.path === '/health' || req.path === '/update-check') return next();
+  if (req.path === '/health') return next();
   if (isLocalRequest(req)) return next();
   if (!ownerPinConfigured()) {
     return res.status(403).json({
@@ -916,6 +1083,11 @@ function publicItemView(item) {
 }
 
 app.get('/api/public/items/:id', (req, res) => {
+  if (!isLocalRequest(req)
+      && !isValidOwnerToken(ownerTokenFromRequest(req))
+      && !isValidItemScanToken(req.params.id, req.query.access)) {
+    return res.status(403).json({ error: 'This QR link is invalid or was created by an older release. Reprint the item label.' });
+  }
   const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
   res.json(publicItemView(enrichItem(item)));
@@ -1366,28 +1538,47 @@ app.get('/api/items/:id', (req, res) => {
   res.json(enrichItem(item));
 });
 
+app.get('/api/items/:id/scan-link', (req, res) => {
+  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id)) {
+    return res.status(404).json({ error: 'Item not found' });
+  }
+  res.json({
+    url: scanUrlForItem(req, req.params.id, req.query.base_url),
+    accessToken: itemScanToken(req.params.id)
+  });
+});
+
 app.get('/api/items/:id/qr', async (req, res) => {
   if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
     return res.status(404).json({ error: 'Item not found' });
-  const scanUrl = `${requestBaseUrl(req)}/scan/${req.params.id}`;
+  const scanUrl = scanUrlForItem(req, req.params.id, req.query.base_url);
   try {
     const png = await QRCode.toBuffer(scanUrl, { type: 'png', margin: 1, width: 280, errorCorrectionLevel: 'M' });
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(png);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+app.get('/api/items/:id/photo-link', (req, res) => {
+  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id)) {
+    return res.status(404).json({ error: 'Item not found' });
+  }
+  const base = shareBaseUrl(req, req.query.base_url);
+  res.json({ url: `${base}/photo-upload.html?id=${encodeURIComponent(req.params.id)}` });
+});
+
 app.get('/api/items/:id/photo-qr', async (req, res) => {
   if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
     return res.status(404).json({ error: 'Item not found' });
-  const uploadUrl = `${requestBaseUrl(req)}/photo-upload.html?id=${req.params.id}`;
+  const base = shareBaseUrl(req, req.query.base_url);
+  const uploadUrl = `${base}/photo-upload.html?id=${encodeURIComponent(req.params.id)}`;
   try {
     const png = await QRCode.toBuffer(uploadUrl, { type: 'png', margin: 1, width: 280, errorCorrectionLevel: 'M' });
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(png);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1899,7 +2090,9 @@ function exportBackupData() {
   const settings = readSettings();
   const safeSettings = {
     guestEnabled: !!settings.guestEnabled,
-    guestToken: settings.guestToken || ''
+    guestToken: settings.guestToken || '',
+    // Preserve printed signed QR labels across full-backup restores.
+    scanLinkSecret: settings.scanLinkSecret || ''
   };
   return {
     manifest: {
@@ -2318,7 +2511,8 @@ app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => 
       try {
         writeSettings({
           guestEnabled: !!backup.settings.guestEnabled,
-          guestToken: backup.settings.guestToken || readSettings().guestToken
+          guestToken: backup.settings.guestToken || readSettings().guestToken,
+          scanLinkSecret: backup.settings.scanLinkSecret || readSettings().scanLinkSecret
         });
       } catch (settingsErr) {
         console.warn('Backup restored, but guest settings could not be updated:', settingsErr.message);
@@ -2359,7 +2553,13 @@ app.use((err, _req, res, _next) => {
 });
 
 app.get('/scan/:id', (req, res) => {
-  res.redirect(`/scan.html?id=${encodeURIComponent(req.params.id)}`);
+  if (!isLocalRequest(req)
+      && !isValidOwnerToken(ownerTokenFromRequest(req))
+      && !isValidItemScanToken(req.params.id, req.query.access)) {
+    return res.status(403).send('This Studio Inventory QR link is invalid or needs to be reprinted.');
+  }
+  const access = req.query.access ? `&access=${encodeURIComponent(req.query.access)}` : '';
+  res.redirect(`/scan.html?id=${encodeURIComponent(req.params.id)}${access}`);
 });
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

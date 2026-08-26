@@ -65,7 +65,7 @@ const state = {
 const container = document.getElementById('view-container');
 let stopCameraScan = null;
 
-const APP_ASSET_VER = '2.5.23-usability1';
+const APP_ASSET_VER = '2.6.0-mobile-security1';
 
 async function ensureFreshAssets() {
   if (localStorage.getItem('app-asset-ver') === APP_ASSET_VER) return false;
@@ -105,7 +105,9 @@ async function init() {
     if (await ensureFreshAssets()) return;
     const health = await api.health();
     updateSidebarVersion(health);
+    setupMobileNav();
     if (!(await ensureOwnerAccess())) return;
+    updateSidebarVersion(await api.health());
     state.meta = await api.meta();
     showBackupBanner();
     checkForAppUpdate();
@@ -204,9 +206,20 @@ async function ensureOwnerAccess() {
 function updateSidebarVersion(health) {
   const label = document.getElementById('item-count-label');
   const version = health.version ? `v${health.version}` : '';
-  label.textContent = version
-    ? `${health.itemCount} items · ${version}`
-    : `${health.itemCount} items`;
+  const count = Number.isFinite(Number(health.itemCount)) ? `${health.itemCount} items` : '';
+  label.textContent = [count, version].filter(Boolean).join(' · ') || 'Studio Inventory';
+}
+
+function setupMobileNav() {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.getElementById('mobile-menu-toggle');
+  if (!sidebar || !toggle || toggle.dataset.bound === '1') return;
+  toggle.dataset.bound = '1';
+  toggle.addEventListener('click', () => {
+    const open = sidebar.classList.toggle('mobile-menu-open');
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? 'Close navigation menu' : 'Open navigation menu');
+  });
 }
 
 async function checkForAppUpdate() {
@@ -259,6 +272,8 @@ function setupNav() {
       if (view === 'item-form') {
         state.editItemId = null;
       }
+      document.getElementById('sidebar')?.classList.remove('mobile-menu-open');
+      document.getElementById('mobile-menu-toggle')?.setAttribute('aria-expanded', 'false');
       navigate(view);
     });
   });
@@ -493,6 +508,7 @@ async function navigate(view, params = {}) {
         bindLabelsPageEvents({
           items: state.items,
           onToast: showToast,
+          onGetScanUrl: async (itemId, baseUrl) => (await api.scanLink(itemId, baseUrl)).url,
           onRefreshStatus: async () => {
             const s = await getDymoStatus();
             if (!s.printers?.length) return;
@@ -674,6 +690,22 @@ function bindInventoryEvents() {
 function bindDetailEvents(item) {
   container.querySelector('[data-nav="inventory"]')?.addEventListener('click', () => navigate('inventory'));
 
+  const phoneQr = container.querySelector('[data-phone-upload-qr]');
+  const phoneLink = container.querySelector('[data-phone-upload-link]');
+  const phoneUrl = container.querySelector('[data-phone-upload-url]');
+  if (phoneQr || phoneLink || phoneUrl) {
+    const baseUrl = loadLabelSettings().baseUrl || window.location.origin;
+    api.photoLink(item.id, baseUrl).then(({ url }) => {
+      if (phoneLink) phoneLink.href = url;
+      if (phoneUrl) phoneUrl.textContent = url;
+      if (phoneQr) {
+        phoneQr.src = `/api/items/${encodeURIComponent(item.id)}/photo-qr?base_url=${encodeURIComponent(baseUrl)}`;
+      }
+    }).catch((err) => {
+      if (phoneUrl) phoneUrl.textContent = err.message || 'Could not prepare phone link';
+    });
+  }
+
   container.querySelector('[data-action="wall-cutout-edit"]')?.addEventListener('click', async () => {
     await openWallCutoutForItem(item, {
       onDone: () => navigate('item-detail', { id: item.id })
@@ -754,7 +786,11 @@ function bindDetailEvents(item) {
   });
 
   container.querySelector('[data-action="print-label"]')?.addEventListener('click', async () => {
-    await printSingleItemLabel(item, showToast);
+    await printSingleItemLabel(
+      item,
+      showToast,
+      async (itemId, baseUrl) => (await api.scanLink(itemId, baseUrl)).url
+    );
   });
 
   container.querySelectorAll('[data-action="print-manual-pdf"]').forEach(btn => {
@@ -1898,11 +1934,16 @@ function bindScanLookupEvents() {
 
   const runLookup = async (code) => {
     const c = String(code || '').trim();
-    if (!c) return showToast('Enter or scan a code', 'error');
+    if (!c) {
+      showToast('Enter or scan a code', 'error');
+      return false;
+    }
     try {
       showResult(await api.lookup(c));
+      return true;
     } catch (err) {
       showToast(err.message, 'error');
+      return false;
     }
   };
 
@@ -1910,6 +1951,38 @@ function bindScanLookupEvents() {
     if (e.key === 'Enter') { e.preventDefault(); runLookup(wedgeInput.value); wedgeInput.select(); }
   });
   document.getElementById('scan-wedge-go')?.addEventListener('click', () => runLookup(wedgeInput?.value));
+
+  const photoInput = document.getElementById('scan-photo-input');
+  const photoStatus = document.getElementById('scan-photo-status');
+  photoInput?.addEventListener('change', async () => {
+    const file = photoInput.files?.[0];
+    photoInput.value = '';
+    if (!file) return;
+    if (photoStatus) photoStatus.textContent = 'Reading label text…';
+    try {
+      const scanned = await api.scanLabel(file);
+      const suggested = scanned.suggestions?.serial_number
+        || scanned.suggestions?.model
+        || scanned.lines?.find(line => /[a-z0-9]/i.test(line))
+        || '';
+      if (!suggested) {
+        if (photoStatus) photoStatus.textContent = 'No serial or model text was found. Try a closer, sharper photo.';
+        return;
+      }
+      if (wedgeInput) wedgeInput.value = suggested;
+      if (photoStatus) {
+        photoStatus.textContent = `Read “${suggested}” (${scanned.confidence || 0}% confidence). Looking it up…`;
+      }
+      const matched = await runLookup(suggested);
+      if (photoStatus) {
+        photoStatus.textContent = matched
+          ? `Matched from label photo: ${suggested}`
+          : `Read “${suggested}”. Edit the text above and tap Look Up if needed.`;
+      }
+    } catch (err) {
+      if (photoStatus) photoStatus.textContent = err.message || 'Could not read that label photo.';
+    }
+  });
 
   let cameraOn = false;
   document.getElementById('scan-camera-toggle')?.addEventListener('click', async () => {
@@ -2496,7 +2569,7 @@ function bindBackupEvents() {
   document.getElementById('owner-pin-set')?.addEventListener('click', async () => {
     const pin = await showModal({
       title: state.ownerAuth?.ownerPinSet ? 'Change Owner PIN' : 'Set Owner PIN',
-      message: 'Use at least 4 characters. Remote browsers on your Wi-Fi will need this before they can edit Studio Inventory.',
+      message: 'Use at least 6 characters. Remote browsers on your Wi-Fi will need this before they can edit Studio Inventory.',
       confirmText: 'Save PIN',
       prompt: true,
       promptType: 'password',
@@ -2618,6 +2691,10 @@ function bindBackupEvents() {
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
+  // Claiming this page during the first installation must not interrupt a
+  // navigation the user has already started. Reload only when an existing
+  // controller is being replaced by an update.
+  const reloadForControllerUpdate = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('/service-worker.js').then(reg => {
     reg.update().catch(() => {});
     if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
@@ -2631,6 +2708,7 @@ function registerServiceWorker() {
     });
   }).catch(() => {});
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!reloadForControllerUpdate) return;
     if (sessionStorage.getItem('sw-reload') === '1') return;
     sessionStorage.setItem('sw-reload', '1');
     window.location.reload();

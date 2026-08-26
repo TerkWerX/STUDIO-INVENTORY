@@ -1,6 +1,6 @@
 {
   "name": "studio-inventory",
-  "version": "2.5.9",
+  "version": "2.6.0",
   "description": "Local inventory management for physical musical instruments and audio hardware — optimized for home studios and 4K TV displays",
   "main": "server.js",
   "author": "TerkWerX",
@@ -19,7 +19,7 @@
     "sync-brands": "node scripts/populate-logos.js",
     "fetch-logos": "node scripts/fetch-logos.js",
     "fetch-logos:force": "node scripts/fetch-logos.js --force",
-    "test": "node scripts/smoke-test.js && node scripts/api-smoke-test.js && node scripts/browser-smoke-test.js",
+    "test": "node scripts/smoke-test.js && node scripts/api-smoke-test.js && node scripts/security-smoke-test.js && node scripts/browser-smoke-test.js",
     "test:api": "node scripts/smoke-test.js && node scripts/api-smoke-test.js",
     "test:browser": "node scripts/browser-smoke-test.js",
     "postinstall": "node scripts/ensure-playwright.js",
@@ -41,12 +41,15 @@
     "playwright": "^1.49.1"
   },
   "dependencies": {
-    "adm-zip": "^0.5.17",
+    "adm-zip": "^0.6.0",
     "better-sqlite3": "^11.7.0",
     "express": "^4.21.2",
     "multer": "^1.4.5-lts.1",
     "pdf-parse": "^1.1.1",
     "qrcode": "^1.5.4",
     "tesseract.js": "^7.0.0"
+  },
+  "overrides": {
+    "body-parser": "1.20.6"
   }
 }

@@ -1,4 +1,4 @@
-/* Studio Inventory — TV-optimized (4K large-screen) styles */
+/* Studio Inventory — responsive touch-friendly styles */
 
 :root {
   --font-base: 22px;
@@ -3443,7 +3443,7 @@ tbody tr:hover { background: var(--bg-hover); }
   .profile-fields-grid, .recommended-accessory-grid { grid-template-columns: 1fr; }
 }
 
-/* 4K TV enhancement — scale up on very large screens */
+/* Large-display enhancement */
 @media (min-width: 2560px) {
   :root {
     --font-base: 26px;

@@ -39,7 +39,7 @@ const DEFAULT_CATEGORIES = [
 ];
 
 const DEFAULT_LOCATIONS = [
-  'Main Rack', 'Desk', 'Storage', "Daughter's Area", 'Other'
+  'Main Rack', 'Desk', 'Storage', 'Practice Area', 'Other'
 ];
 
 const DRIVER_CATEGORIES = new Set([

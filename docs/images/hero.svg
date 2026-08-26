@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">Studio Inventory</title>
+  <desc id="desc">Local-first gear catalog, documentation, and studio planning</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101722"/>
+      <stop offset="0.55" stop-color="#19263a"/>
+      <stop offset="1" stop-color="#102b2c"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4da3ff"/>
+      <stop offset="1" stop-color="#3dd68c"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="320" rx="28" fill="url(#bg)"/>
+  <circle cx="1035" cy="58" r="130" fill="#4da3ff" opacity=".08" filter="url(#glow)"/>
+  <circle cx="110" cy="300" r="155" fill="#3dd68c" opacity=".07" filter="url(#glow)"/>
+  <path d="M0 274 C210 228 340 312 545 264 S890 212 1200 260" fill="none" stroke="url(#line)" stroke-width="2" opacity=".28"/>
+
+  <g transform="translate(76 69)">
+    <rect width="164" height="164" rx="34" fill="#1a2332" stroke="#324760" stroke-width="2"/>
+    <circle cx="82" cy="78" r="51" stroke="#4da3ff" stroke-width="6" fill="none"/>
+    <path d="M46 100c14-23 58-23 72 0" stroke="#4da3ff" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="82" cy="58" r="10" fill="#4da3ff"/>
+    <rect x="112" y="112" width="42" height="42" rx="9" fill="#3dd68c"/>
+    <path d="M122 133h22M133 122v22" stroke="#14202e" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <g font-family="Segoe UI, Inter, Arial, sans-serif">
+    <text x="280" y="126" fill="#f6f9fc" font-size="58" font-weight="750" letter-spacing="-1">Studio Inventory</text>
+    <text x="283" y="172" fill="#b8c8dc" font-size="22">Know what you own. Find what you need. Protect what matters.</text>
+    <g transform="translate(283 207)" font-size="15" font-weight="600">
+      <rect width="120" height="34" rx="17" fill="#203650"/><text x="60" y="22" text-anchor="middle" fill="#78baff">LOCAL-FIRST</text>
+      <rect x="132" width="150" height="34" rx="17" fill="#203b38"/><text x="207" y="22" text-anchor="middle" fill="#69dfa8">CROSS-PLATFORM</text>
+      <rect x="294" width="158" height="34" rx="17" fill="#3a3020"/><text x="373" y="22" text-anchor="middle" fill="#ffc35a">MOBILE-FRIENDLY</text>
+    </g>
+  </g>
+
+  <g transform="translate(985 204)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="0" y="0" width="58" height="76" rx="9" stroke="#5f7fa2" stroke-width="3"/>
+    <path d="M18 14h22M15 29h28M15 41h20" stroke="#4da3ff" stroke-width="3"/>
+    <path d="M18 59l7 7 17-19" stroke="#3dd68c" stroke-width="4"/>
+    <rect x="72" y="18" width="80" height="56" rx="8" stroke="#5f7fa2" stroke-width="3"/>
+    <path d="M90 37h44M90 50h31" stroke="#4da3ff" stroke-width="3"/>
+  </g>
+</svg>

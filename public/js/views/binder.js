@@ -49,7 +49,7 @@ export function renderBinderPage(items, stats, studioName) {
       <div class="form-grid" style="margin-bottom:1rem">
         <div class="form-group">
           <label for="binder-studio-name">Studio / Owner name (cover page)</label>
-          <input type="text" id="binder-studio-name" value="${escapeHtml(studioName)}" placeholder="My Home Studio">
+          <input type="text" id="binder-studio-name" value="${escapeHtml(studioName)}" placeholder="Studio name">
         </div>
         <div class="form-group">
           <label class="checkbox-label">

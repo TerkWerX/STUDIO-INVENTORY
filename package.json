@@ -1,7 +1,7 @@
 {
   "name": "studio-inventory",
   "version": "2.7.0",
-  "description": "Local inventory management for physical musical instruments and audio hardware — optimized for home studios and 4K TV displays",
+  "description": "Local-first inventory and studio planning for musical instruments, audio equipment, documents, accessories, and software",
   "main": "server.js",
   "author": "TerkWerX",
   "repository": {
@@ -34,7 +34,9 @@
     "sqlite",
     "express",
     "pwa",
-    "4k-tv"
+    "local-first",
+    "self-hosted",
+    "equipment-management"
   ],
   "license": "MIT",
   "devDependencies": {

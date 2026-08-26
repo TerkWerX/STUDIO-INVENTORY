@@ -79,7 +79,7 @@ export function renderAbout() {
       <ol style="list-style:decimal;padding-left:1.5rem;color:var(--text-secondary);line-height:2">
         <li>Install <strong>DYMO Connect</strong> and connect your LabelWriter 450 Turbo.</li>
         <li>Open <strong>Owner Labels</strong> in the sidebar.</li>
-        <li>Set <strong>QR Base URL</strong> to your NUC's LAN address (e.g. <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://192.168.1.50:3847</code>) so phones on Wi‑Fi can scan labels.</li>
+        <li>Set <strong>QR Base URL</strong> to the host computer's LAN address (e.g. <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://192.168.1.50:3847</code>) so phones on Wi‑Fi can scan labels.</li>
         <li>Select gear and click <strong>Print Selected (DYMO)</strong>. Use 30252 address labels for best results.</li>
         <li>Affix labels to gear. Scanning opens a quick page with manuals, drivers, edit link, and full details.</li>
       </ol>

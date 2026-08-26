@@ -26,10 +26,10 @@ export function renderLabelsPage(items, settings, dymoStatus, preselectedId = nu
       <div class="form-grid label-settings-grid">
         <div class="form-group">
           <label for="label-studio-name">Studio / Owner Name</label>
-          <input type="text" id="label-studio-name" value="${escapeHtml(settings.studioName)}" placeholder="My Studio">
+          <input type="text" id="label-studio-name" value="${escapeHtml(settings.studioName)}" placeholder="Studio name">
         </div>
         <div class="form-group">
-          <label for="label-base-url">QR Base URL <span class="text-muted-sm">(your NUC IP for phone scans)</span></label>
+          <label for="label-base-url">QR Base URL <span class="text-muted-sm">(host computer address for phone scans)</span></label>
           <input type="url" id="label-base-url" value="${escapeHtml(settings.baseUrl)}" placeholder="http://192.168.1.50:3847">
         </div>
         <div class="form-group">

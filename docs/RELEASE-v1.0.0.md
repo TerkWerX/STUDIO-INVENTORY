@@ -7,7 +7,7 @@ First public release — a local, browser-based inventory app for **physical** s
 - Full inventory CRUD with photos, manuals, software/driver archive, and insurance PDF export
 - Dashboard with stats, brand carousel, and category/location breakdowns
 - **Browse by Brand** — auto-fetched logos, custom uploads, tap-to-filter item cards
-- Dark theme optimized for 4K TV / touch (large fonts, 56px+ tap targets)
+- Responsive dark theme with large touch targets and enhanced large-display scaling
 - PWA installable shell with offline caching
 - Runs entirely on your LAN — no cloud account required
 

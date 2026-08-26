@@ -195,7 +195,7 @@ export function showChoiceModal({ title, message, choices = [] }) {
 }
 
 export const DEFAULT_TAGS = [
-  'Essential', 'Vintage', "Daughter's Gear", 'Recording', 'Live', 'Loaned Out'
+  'Essential', 'Vintage', 'Lessons', 'Recording', 'Live', 'Loaned Out'
 ];
 
 export const DRIVER_CATEGORIES = new Set([

@@ -1,182 +1,115 @@
-# Studio Inventory
-
-**Local-first inventory, documentation, and virtual studio planning for musical instruments and audio hardware** — built for home studios, optimized for fullscreen use on large displays and local network access.
-
-**Works on Windows, macOS, and Linux** — same app, same features. Your data stays on your machine.
-
-[![CI](https://github.com/TerkWerX/STUDIO-INVENTORY/actions/workflows/ci.yml/badge.svg)](https://github.com/TerkWerX/STUDIO-INVENTORY/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
-
-> **Mac musician?** Start here → **[MAC.md](MAC.md)** — full setup guide (Node, Terminal, iPhone access, DYMO, troubleshooting).
-
-> Tracks guitars, basses, mics, interfaces, mixers, control surfaces, monitors, pedals, amps, rack gear, accessories, manuals, receipts, loans, and wall placement — **not** sample libraries, loops, or software sound assets.
-
 <p align="center">
-  <img src="docs/images/dashboard.png" alt="Studio Inventory dashboard with stats, brand carousel, and category breakdown" width="800">
+  <img src="docs/images/hero.svg" alt="Studio Inventory — local-first gear catalog, documentation, and studio planning" width="100%">
 </p>
 
 <p align="center">
-  <em>Dashboard — totals, brand carousel, and studio breakdowns at a glance</em>
+  <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/TerkWerX/STUDIO-INVENTORY?display_name=tag&sort=semver&style=flat-square&color=4da3ff"></a>
+  <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/TerkWerX/STUDIO-INVENTORY/ci.yml?branch=main&style=flat-square&label=tests"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-3dd68c?style=flat-square"></a>
+  <img alt="Windows, macOS, and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-8fa8c7?style=flat-square">
+  <img alt="Local first" src="https://img.shields.io/badge/data-local--first-f5a623?style=flat-square">
 </p>
 
 <p align="center">
-  <img src="docs/images/brands.png" alt="Browse by Brand page with manufacturer logos" width="800">
+  <strong>Know what you own. Find what you need. Protect what matters.</strong><br>
+  A local-first inventory and studio-planning app for instruments, audio equipment, accessories, documents, and software.
 </p>
 
 <p align="center">
-  <em>Brands page — tap any logo to filter your gear by manufacturer</em>
+  <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/releases/latest"><strong>Download</strong></a> ·
+  <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/wiki"><strong>Wiki</strong></a> ·
+  <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/discussions"><strong>Discussions</strong></a> ·
+  <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/issues"><strong>Issues</strong></a>
 </p>
 
 ---
 
-## Why Studio Inventory?
+## Meet Studio Inventory
 
-Home studios accumulate serious gear fast. Studio Inventory gives you one place to document what you own, what it's worth, where it lives, who borrowed it, and the paperwork that matters for insurance, resale, service, and day-to-day studio use.
+Gear collections grow one cable, bracket, instrument, and impulse purchase at a time. Studio Inventory gives musicians, engineers, rehearsal spaces, schools, collectors, and small studios one place to track the equipment itself—and the details that make it useful later.
 
-- **Touch-friendly dark UI** — large fonts and 56px+ tap targets for an 86" 4K TV
-- **Runs entirely on your LAN** — no cloud account, no subscription
-- **Insurance-ready exports** — PDF reports with photos and serial numbers
-- **Virtual studio wall planning** — place life-size gear cutouts onto calibrated room wall photos
-- **Manuals stay organized** — search online, save from URL, or import through a dedicated Manual Inbox
-- **Brand browsing** — logo carousel and grid to filter gear by manufacturer
+- **No subscription or cloud account.** The database, photos, receipts, and manuals stay on the host computer.
+- **Ready for real equipment chains.** Nest a drum pad under its mount, the adapter under that, and the paid thumb screws under the adapter.
+- **Useful away from the desk.** Add photos and scan labels from Android Chrome/Edge or iPhone/iPad Safari on the same trusted network.
+- **Built for proof of ownership.** Track serials, values, receipts, condition, warranties, manuals, and insurance notes.
+- **Comfortable everywhere.** Responsive, touch-friendly layouts work on phones, tablets, desktops, and large displays.
 
----
+## A quick look
 
-## Features
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/dashboard.png" alt="Dashboard showing documentation health, values, and inventory status"></td>
+    <td width="50%"><img src="docs/images/brands.png" alt="Browse inventory by equipment brand"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><strong>Dashboard</strong> — value, documentation, loans, and recent activity</sub></td>
+    <td align="center"><sub><strong>Browse by brand</strong> — a visual path through the collection</sub></td>
+  </tr>
+</table>
 
-| Area | What you get |
-|------|----------------|
-| **Inventory** | Full CRUD with serials, values, condition, warranty, location, tags, accessories, insurance notes, and quantity |
-| **Smart item profiles** | Type-specific specifications and related-part suggestions for instruments, electronic drums, rack gear, patchbays, monitors, cables, mounts, and fasteners |
-| **Photos & receipts** | Multi-photo gallery, fullscreen lightbox, receipt upload, warranty notes, and documentation checklist |
-| **Manuals & documents** | Upload PDFs/docs, search inside indexed PDFs, find manuals online, save from URL, and import from Manual Inbox |
-| **Manual Inbox** | Dedicated `data/manual-inbox/` folder for browser downloads that need to be attached to a specific gear record |
-| **Virtual studio** | Draw rooms, calibrate wall photos with corner points, place gear on walls/floors/racks, and browse room wall views |
-| **Wall cutouts** | Crop/key/scale instrument photos for life-size virtual wall placement, with metric/imperial measurements |
-| **Loans** | Check gear out, track borrowers/due dates, hide loaned wall gear, and rehang it when returned |
-| **Software catalog** | Track plugins, licenses, activations, renewals, screenshots, and host hardware |
-| **Driver/software archive** | Paste manufacturer download URLs; server archives versioned drivers/firmware locally |
-| **Search & filters** | Full-text inventory search, category, location, condition, tags, value range, sorting, and accessory visibility |
-| **Dashboard** | Totals, documentation progress, software renewals, recent additions, high-value items, and brand carousel |
-| **Brands** | Auto-fetched logos, custom uploads, tap-to-filter item cards |
-| **Owner Labels** | QR labels for DYMO LabelWriter — scan to open manuals, software, loans, and item details |
-| **Binder print** | Print gear pages, index pages, and selected PDFs for a physical insurance/owner binder |
-| **Reports & backup** | PDF, CSV, JSON, SQL export, guest read-only sharing, and local folder backup |
-| **PWA** | Installable local web app with offline shell caching |
+## What it can do
 
----
+| Catalog and protect | Organize and connect | Plan and operate |
+|---|---|---|
+| Serials, values, condition, warranties, receipts, photos, and insurance reports | Smart profiles, nested components, compatibility history, tags, manuals, and searchable PDFs | Room layouts, calibrated wall views, rack and signal-chain planning, loans, and binder printing |
+| Signed QR owner labels and read-only guest links | Cables, mounts, fasteners, patchbays, monitors, instruments, drums, and software licenses | Mobile photo capture, responsive PWA, brand browsing, documentation scoring, and backup/restore |
 
-## Download (Windows, macOS & Linux — no Node required)
+### Smart profiles understand the shape of the gear
 
-Pre-built packages are on the **[Releases](https://github.com/TerkWerX/STUDIO-INVENTORY/releases)** page:
+Choose an **Item Type / Smart Profile** and the form reveals useful fields for that kind of equipment. Profiles cover brass and bowed strings, guitars and basses, acoustic and electronic drums, pads and cymbals, mounting hardware, fasteners, cables, patchbays, racks, and studio monitors.
 
-| Platform | Download | How to run |
-|----------|----------|------------|
-| **Windows** | `Studio-Inventory-v…-Windows-Setup.exe` | Double-click the setup file → choose shortcuts → install like a normal Windows app |
-| **Windows portable** | `Studio-Inventory-v…-Windows.zip` | Extract → double-click **Studio Inventory.exe**; useful for testing without installing |
-| **macOS** | `Studio-Inventory-v…-macOS.zip` or `.dmg` | Extract / open DMG → double-click **Start Studio Inventory.command** (or **Install Studio Inventory.command** to copy to Applications) |
-| **Linux x64** | `Studio-Inventory-v…-Linux-x64.tar.gz` or `.zip` | Extract → run `./Start\ Studio\ Inventory.sh` (or `./Install\ Studio\ Inventory.sh`); see [LINUX.md](LINUX.md) |
-
-These bundles include the Node runtime and production dependencies — your friends do **not** need to install Node.js or run `npm install`.
-
-### Updating without losing data
-
-Your inventory lives in the `data/` folder (database + photos + manuals + receipts). It is **never** included in release downloads.
-
-| How you installed | How to update |
-|-------------------|---------------|
-| **Windows/macOS/Linux package** | Download the newer release → run **Install Studio Inventory** again — your `data/` folder is backed up and restored automatically |
-| **Git clone** | `git pull && npm install` — `data/` is gitignored and stays put |
-
-The app checks GitHub at startup and shows an **update available** banner when a newer release is published.
-
----
-
-## Quick Start (developers / git clone)
-
-**Requirements:** [Node.js](https://nodejs.org/) 18+
-
-```bash
-git clone https://github.com/TerkWerX/STUDIO-INVENTORY.git
-cd STUDIO-INVENTORY
-npm install
-npm run reseed    # optional: load 15 sample gear items (~$15k value)
-npm start         # http://localhost:3847
+```text
+Electronic drum kit
+└── Alesis ControlPad
+    └── Gibraltar adapter clamp
+        └── Mounting thumb screws
 ```
 
-Open **http://localhost:3847** — press **F11** (or **Cmd+Ctrl+F** on Mac) for fullscreen.
+Every record can keep its own price, receipt, photos, specifications, and compatibility result. Parent records show the complete assembly value.
 
-From another device on your network: `http://<your-computer-ip>:3847`
+## Install
 
-Before remote use, open **Backup & Restore** on the studio computer and set an owner PIN of at least 6 characters. Phones and tablets must unlock once per browser. Sessions are kept separately, so signing in on an iPad does not sign an Android tablet out.
+Pre-built releases include the runtime and production dependencies—no separate Node.js installation is required.
 
-### Phone and tablet support
+| Platform | Recommended download | Start here |
+|---|---|---|
+| **Windows** | `Windows-Setup.exe` | Run setup, then launch **Studio Inventory** |
+| **macOS** | `.dmg` | Open the image and run the installer; Control-click → **Open** if Gatekeeper warns |
+| **Linux x64** | `.tar.gz` | Extract and run `Install Studio Inventory.sh` |
+| **Portable use** | Platform ZIP | Extract and use the included launcher |
 
-- **Android Chrome / Edge:** full inventory editing and photo capture are supported. Live barcode video is available only when the page is served through HTTPS; on the normal LAN `http://` address, use **Take a Label Photo** or the device's native QR scanner.
-- **iPhone / iPad Safari:** full inventory editing, signed QR item pages, and **Take Photo / Choose from Gallery** are supported. Use **Take a Label Photo** for serial/model recognition.
-- **Security:** remote APIs and uploaded files require the owner session, guest token, or a signed single-item QR link. Incorrect PIN attempts are rate-limited. Do not forward port `3847` to the internet; plain HTTP LAN traffic is not encrypted, so use only a trusted WPA2/WPA3 network or place the app behind trusted HTTPS/VPN access.
+**[Download the latest release →](https://github.com/TerkWerX/STUDIO-INVENTORY/releases/latest)**
 
-### Smart instrument and equipment profiles
+Existing inventory lives in the local `data/` folder and is preserved by release installers. Create a **Full Backup ZIP** before any upgrade.
 
-Choose **Item Type / Smart Profile** while adding or editing gear. Studio Inventory shows the specifications that matter for that item and suggests related records you may own. Profiles cover brass and bowed strings, guitars and basses, keyboards, acoustic and electronic drums, drum modules and trigger pads, cymbals, rack hardware, mounts, fasteners, patchbays, studio monitors, and audio/data cables.
+Platform guides: **[macOS](MAC.md)** · **[Linux](LINUX.md)** · **[Wiki installation guide](https://github.com/TerkWerX/STUDIO-INVENTORY/wiki/Installation)**
 
-Related purchases remain separate inventory records with their own price, receipt, serial number, photos, and compatibility result. Records can be nested into assemblies—for example: electronic drum kit → ControlPad → adapter clamp → paid thumb screws. A mount that did not fit can be recorded as incompatible, while the adapter that solved the problem can record the complete mounting chain.
+## Phone and tablet access
 
----
+1. Start Studio Inventory on the host computer.
+2. Open **Backup & Restore** and set an owner PIN of at least six characters.
+3. Connect the phone or tablet to the same trusted Wi-Fi network.
+4. Open the LAN address shown by the app and enter the PIN.
 
-## Manual Finder + Manual Inbox
+Android Chrome/Edge and iPhone/iPad Safari support inventory editing and photo capture. Live barcode video requires HTTPS; the regular LAN address provides **Take a Label Photo** and signed QR links instead.
 
-Manuals are meant to end up attached to the correct item record, not scattered around Downloads.
+> [!IMPORTANT]
+> Do not forward port `3847` to the internet. Normal LAN HTTP traffic is not encrypted. Use trusted WPA2/WPA3 Wi-Fi, HTTPS, or a VPN.
 
-### Best path: save directly from the app
+## Your data stays understandable
 
-1. Open **Manuals & Documents**
-2. Under **Find Manuals Online**, choose an item and click **Find Online**
-3. Review the curated online results inside Studio Inventory
-4. If a result is a direct manual/PDF, click **Save to Item**
-5. If a result is a support page, click **Scan for PDFs**, then save the right candidate
+| Location | Contents |
+|---|---|
+| `data/inventory.db` | SQLite catalog |
+| `data/uploads/` | Photos, receipts, manuals, logos, software, and studio images |
+| `data/manual-inbox/` | Files waiting to be attached to an item |
+| `data/backups/` | Suggested destination for backup exports |
 
-The server downloads the file into `data/uploads/manuals/{item id}/`, stores the source URL, and attaches it to that gear record.
+The app supports Full Backup ZIP, JSON, SQL, CSV, and PDF exports. Full Backup ZIP is the complete recovery format because it includes managed files as well as the database.
 
-### Fallback path: outside browser downloads
+## Run from source
 
-Some manufacturer sites force normal browser downloads. For those cases:
-
-1. Click **Open Folder** in the **Manual Inbox** panel
-2. Save downloaded PDFs/manuals into `data/manual-inbox/`
-3. Back in Studio Inventory, click **Refresh**
-4. Click **Import from Inbox** on the matching item
-5. Choose the file; Studio Inventory moves it into that item's managed manual folder
-
-The Manual Inbox folder is created automatically at startup and again whenever the inbox is opened or refreshed.
-
----
-
-## Studio View + Virtual Walls
-
-Studio Inventory can model a room and let you hang gear on calibrated wall photos.
-
-1. Open **Studio Setup**
-2. Create a room and draw its outline
-3. Enter wall dimensions in imperial or metric units
-4. Add wall photos and mark the four wall corners for perspective alignment
-5. Open an item and choose **Add cutout** or **Place in studio**
-6. Crop/key the cutout, set scale from two precise points, then place it on a wall
-
-Wall browse mode shows the wall photo plus every instrument/logo already placed there, so you can avoid overlapping real wall space. Placed wall items can be rotated and fine-tuned for straight hanging.
-
-Loaned items are automatically hidden from wall display while checked out, and the app prompts you to rehang them when returned.
-
----
-
-## Mac users
-
-Studio Inventory runs natively on macOS — same features as Windows.
-
-**→ [MAC.md — complete Mac setup guide](MAC.md)** (install Node, clone or ZIP download, iPhone scanning, DYMO labels, backups, troubleshooting)
-
-Quick version:
+Requires [Node.js](https://nodejs.org/) 18 or newer.
 
 ```bash
 git clone https://github.com/TerkWerX/STUDIO-INVENTORY.git
@@ -185,197 +118,33 @@ npm install
 npm start
 ```
 
-Open **http://localhost:3847** · Use **⌘** for keyboard shortcuts · Skip `npm run reseed` unless you want demo sample gear.
-
----
-
-## Project Structure
-
-```
-STUDIO-INVENTORY/
-├── server.js              # Express API + static file serving
-├── db.js                  # SQLite schema and helpers
-├── seed.js                # Sample inventory data
-├── lib/
-│   ├── pdf-index.js
-│   ├── fetch-brand-logo.js
-│   ├── brand-domains.js
-│   └── brand-svg.js
-├── public/                # Frontend (vanilla JS, dark theme)
-│   ├── index.html
-│   ├── css/styles.css
-│   └── js/
-│       ├── views/
-│       └── lib/           # Floorplan, wall, measurement, label, and print helpers
-├── scripts/
-│   ├── fetch-logos.js
-│   ├── populate-logos.js
-│   └── browser-smoke-test.js
-└── data/                  # Created at runtime (gitignored)
-    ├── inventory.db
-    ├── manual-inbox/
-    └── uploads/
-        ├── photos/
-        ├── manuals/
-        ├── receipts/
-        ├── software/
-        ├── software-licenses/
-        ├── floorplans/
-        ├── wall-photos/
-        └── logos/
-```
-
----
-
-## Data Storage
-
-| Path | Contents |
-|------|----------|
-| `data/inventory.db` | SQLite database |
-| `data/manual-inbox/` | Safe landing zone for PDFs downloaded through an outside browser before import |
-| `data/uploads/photos/{id}/` | Item photos |
-| `data/uploads/manuals/{id}/` | PDFs and documents |
-| `data/uploads/receipts/{id}/` | Purchase receipts and proof-of-ownership documents |
-| `data/uploads/software/{id}/` | Archived drivers/firmware (all versions kept) |
-| `data/uploads/software-licenses/{id}/` | Software license screenshots |
-| `data/uploads/floorplans/` | Room/floor images |
-| `data/uploads/floorplans/walls/{floorplan id}/` | Wall photos used for calibrated studio wall views |
-| `data/uploads/wall-photos/{id}/` | Life-size wall cutout images for gear placement |
-| `data/uploads/logos/` | Brand logos (cached locally after fetch) |
-| `data/backups/` | Recommended export destination |
-
-Your database and uploads are **local only** and excluded from git. Back them up regularly.
-
-### Full backup
-
-1. Open **Backup & Restore** → **Full Backup ZIP**.
-2. Keep the ZIP somewhere outside the Studio Inventory data folder.
-3. Use **Restore Full Backup** to restore the database, managed uploads, and manual inbox together.
-4. JSON, SQL, and CSV are advanced catalog/data exports; they are not substitutes for a Full Backup ZIP when you need media and studio layouts.
-
----
-
-## Owner Labels (QR + DYMO)
-
-Print owner labels with signed QR codes for each piece of gear. Scanning with any phone opens a quick page for that item without exposing the rest of the inventory.
-
-1. Install **DYMO Connect** and connect your LabelWriter 450 Turbo
-2. Open **Owner Labels** in the sidebar
-3. Set **QR Base URL** to your NUC's LAN IP (e.g. `http://192.168.1.50:3847`) so phones on Wi‑Fi can reach the server
-4. Select items → **Print Selected (DYMO)** (30252 address labels recommended)
-5. Affix labels to gear
-
-Labels printed before v2.6.0 do not contain the new access signature and must be reprinted before remote phone scans will open them.
-
-**Browser fallback:** Use **Print Selected (Browser)** if DYMO Connect isn't detected — choose your label printer in the system print dialog (Windows or Mac).
-
-From any item's detail page, click **Print Owner Label** for a one-off print.
-
-## Brand Logos
-
-Logos are fetched automatically when you add an item with a brand name.
-
-1. Enter a **Brand** (e.g. `Fender`, `Shure`) when creating or editing an item
-2. On save, the server fetches a logo from the web and caches it under `data/uploads/logos/`
-3. Sources (in order): Clearbit → Unavatar → Google/DuckDuckGo favicons → generated SVG badge
-4. On server start, missing logos are fetched for all brands in your inventory
-
-Custom uploads via **Brands → Custom Brand Logo** are never overwritten.
+Open `http://localhost:3847`. To explore with sample equipment, run `npm run reseed` before starting.
 
 ```bash
-npm run fetch-logos         # fetch missing logos only
-npm run fetch-logos:force   # re-fetch all non-custom logos
+npm test              # API, restore, security, and browser regression suite
+npm run test:api      # server and API tests
+npm run test:browser  # Playwright UI tests
 ```
 
-Unknown brand? Add its domain to `lib/brand-domains.js`, or upload your own PNG.
+### Technology
 
----
+Node.js · Express · SQLite (`better-sqlite3`) · vanilla JavaScript modules · Playwright · local filesystem storage
 
-## Software & Driver Archive
+There is no frontend build step. The server exposes the API and serves the responsive web app directly.
 
-For interfaces, mixers, control surfaces, keyboards, and any gear with drivers or firmware:
+## Documentation and community
 
-1. Open item detail → **Software & Drivers Archive**
-2. Paste a manufacturer download URL → **Download & Archive**
-3. Or upload a local installer file directly
-4. Use **Check for Updates** to search for newer drivers (manual, on-demand)
+| Need | Go to |
+|---|---|
+| Learn the main workflows | [Project wiki](https://github.com/TerkWerX/STUDIO-INVENTORY/wiki) |
+| Ask a question or share an idea | [Discussions](https://github.com/TerkWerX/STUDIO-INVENTORY/discussions) |
+| Report a reproducible problem | [Issues](https://github.com/TerkWerX/STUDIO-INVENTORY/issues) |
+| Help improve the project | [Contributing guide](CONTRIBUTING.md) |
+| Report a security concern | [Security policy](SECURITY.md) |
+| Get installation help | [Support guide](SUPPORT.md) |
 
-Disable update checks for end-of-life gear with the **Driver/Software Update Checks** toggle when editing an item.
-
-For plugins, subscriptions, iLok/serial licenses, and studio software, use the **Software** page. It tracks license keys, activation method, plugin format, renewal dates, seats, host gear, screenshots, and replacement value separately from physical inventory.
-
----
-
-## Auto-Start
-
-### Windows
-
-Double-click `start-studio-inventory.bat`, or add a shortcut to your Startup folder:
-
-```
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
-```
-
-**Task Scheduler alternative:** trigger at startup, run `node.exe` with `server.js`, start in your project folder.
-
-### macOS
-
-```bash
-chmod +x start-studio-inventory.sh
-```
-
-Then add `start-studio-inventory.sh` via **System Settings → General → Login Items**, or create a Launch Agent if you prefer it always running in the background.
-
----
-
-## Keyboard Shortcuts
-
-Works with **Ctrl** (Windows/Linux) or **⌘ Cmd** (Mac).
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl/⌘ + N` | New item |
-| `Ctrl/⌘ + F` | Focus search (Inventory) |
-| `Ctrl/⌘ + S` | Save item (form) |
-| `Escape` | Close modal / lightbox |
-
----
-
-## Scripts
-
-| Command | Description |
-|---------|-------------|
-| `npm start` | Start server (port 3847) |
-| `npm run seed` | Load sample data (skips if DB has items) |
-| `npm run reseed` | Clear and reload sample data |
-| `npm run fetch-logos` | Fetch missing brand logos |
-| `npm run fetch-logos:force` | Re-fetch all non-custom logos |
-| `npm run sync-brands` | Sync brand records from inventory items |
-| `npm test` | Run API + browser smoke tests with isolated temp databases |
-| `npm run test:api` | Run server/API smoke tests |
-| `npm run test:browser` | Run Playwright browser smoke test |
-| `npm run screenshots` | Capture README screenshots (server must be running) |
-
----
-
-## Sample Data
-
-`npm run reseed` loads 15 physical gear items — guitars, bass, mics, interfaces, control surface, mixer, monitors, piano, drums, amp, and pedals — with placeholder photos and ~$15,000+ total replacement value. Delete them when you're ready to enter your real studio.
-
----
-
-## Tech Stack
-
-- **Backend:** Node.js, Express, better-sqlite3
-- **Frontend:** Vanilla JavaScript (ES modules), no build step
-- **Storage:** SQLite + local filesystem uploads
-- **PDF export:** jsPDF (CDN)
-- **PDF indexing:** `pdf-parse` for searchable uploaded manuals
-- **Labels/QR:** QRCode + DYMO/browser print fallback
-- **Testing:** Node smoke tests + Playwright browser tests
-
----
+Curious contributors are welcome. Documentation fixes, additional equipment profiles, accessibility improvements, browser testing, and thoughtful feature ideas are all useful.
 
 ## License
 
-[MIT](LICENSE) — Copyright (c) 2026 TerkWerX
+[MIT](LICENSE) © 2026 TerkWerX

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/TerkWerX/STUDIO-INVENTORY/discussions
+    about: Ask for help or explore an idea with the community.
+  - name: Project wiki
+    url: https://github.com/TerkWerX/STUDIO-INVENTORY/wiki
+    about: Read installation, mobile-access, backup, and troubleshooting guides.

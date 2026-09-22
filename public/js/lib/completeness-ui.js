@@ -7,8 +7,18 @@ export const STUDIO_STATUS_LABELS = {
   loaned: 'Loaned out',
   in_repair: 'In repair',
   storage: 'In storage',
-  away: 'Away'
+  away: 'Away',
+  sold: 'Sold',
+  stolen: 'Stolen',
+  destroyed: 'Destroyed',
+  given_away: 'Given away'
 };
+
+export const FORMER_STATUSES = ['sold', 'stolen', 'destroyed', 'given_away'];
+
+export function isFormerStatus(status) {
+  return FORMER_STATUSES.includes(status);
+}
 
 export function renderCompletenessBadge(completeness, { compact = false } = {}) {
   if (!completeness) return '';

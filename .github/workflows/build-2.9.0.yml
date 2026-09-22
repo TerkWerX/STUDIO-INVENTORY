@@ -1,0 +1,143 @@
+name: Build 2.9.0 release
+on:
+  push:
+    branches: [codex/release-2.9.0]
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            label: macOS
+          - os: ubuntu-22.04
+            platform: linux
+            label: Linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Package native runtime and dependencies
+        run: node scripts/package-release.js ${{ matrix.platform }} dist/studio-inventory-${{ matrix.platform }}
+      - name: Verify packaged server and native database
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/dist/studio-inventory-${{ matrix.platform }}"
+          export PORT=3892 STUDIO_DATA_DIR="$RUNNER_TEMP/test-data" STUDIO_SKIP_UPDATE_CHECK=1
+          "$app/.runtime/node" "$app/server.js" > "$RUNNER_TEMP/server.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3892/api/health > "$RUNNER_TEMP/health.json"; then break; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/server.log"
+          "$app/.runtime/node" -e 'const h=require(process.env.RUNNER_TEMP+"/health.json"); if(!h.ok) process.exit(1); console.log(h); const p=require(process.cwd()+"/package.json"); if(p.version!=="2.9.0") process.exit(1);'
+          file "$app/.runtime/node"
+          find "$app/node_modules" -name '*.node' -exec file {} \;
+      - name: Test Linux installation and upgrade preservation
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/installed"
+          bash 'dist/studio-inventory-linux/Install Studio Inventory.sh' --target "$target" --no-start --no-shortcuts
+          echo preserved > "$target/data/upgrade-check.txt"
+          bash 'dist/studio-inventory-linux/Install Studio Inventory.sh' --target "$target" --no-start --no-shortcuts
+          test "$(cat "$target/data/upgrade-check.txt")" = preserved
+          "$target/.runtime/node" -e 'require(process.argv[1])' "$target/node_modules/better-sqlite3-multiple-ciphers"
+      - name: Test Mac installation and upgrade preservation
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/mac-test-home"
+          mkdir -p "$HOME/Desktop"
+          printf 'n\n' | bash 'dist/studio-inventory-mac/Install Studio Inventory.command'
+          target="$HOME/Applications/Studio Inventory"
+          echo preserved > "$target/data/upgrade-check.txt"
+          printf 'n\n' | bash 'dist/studio-inventory-mac/Install Studio Inventory.command'
+          test "$(cat "$target/data/upgrade-check.txt")" = preserved
+          test -x "$target/.runtime/node"
+      - name: Create archives
+        shell: bash
+        run: |
+          cd dist
+          zip -qr 'Studio-Inventory-v2.9.0-${{ matrix.label }}.zip' studio-inventory-${{ matrix.platform }}
+          if [ '${{ matrix.platform }}' = mac ]; then
+            hdiutil create -volname 'Studio Inventory 2.9.0' -srcfolder studio-inventory-mac -ov -format UDZO Studio-Inventory-v2.9.0-macOS.dmg
+            hdiutil verify Studio-Inventory-v2.9.0-macOS.dmg
+          else
+            tar -czf Studio-Inventory-v2.9.0-Linux-x64.tar.gz studio-inventory-linux
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Studio-Inventory-v2.9.0-${{ matrix.label }}
+          path: dist/Studio-Inventory-v2.9.0-*
+          compression-level: 0
+          retention-days: 14
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --omit=dev
+      - run: node scripts/package-release.js win dist/studio-inventory-win
+      - run: node scripts/build-windows-setup.js dist/studio-inventory-win dist/Studio-Inventory-v2.9.0-Windows-Setup.exe
+      - name: Test setup, upgrade preservation, and installed server
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:RUNNER_TEMP 'studio-inventory-install-test'
+          $setup = (Resolve-Path 'dist/Studio-Inventory-v2.9.0-Windows-Setup.exe').Path
+          $argsList = @('--silent', '--no-start', '--no-shortcuts', '--target', $target)
+          $install = Start-Process -FilePath $setup -ArgumentList $argsList -WindowStyle Hidden -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw 'Setup failed' }
+          Set-Content (Join-Path $target 'data\upgrade-check.txt') 'preserved'
+          $install = Start-Process -FilePath $setup -ArgumentList $argsList -WindowStyle Hidden -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw 'Upgrade failed' }
+          if ((Get-Content (Join-Path $target 'data\upgrade-check.txt')) -ne 'preserved') { throw 'Upgrade lost data' }
+          $env:PORT = '3891'
+          $env:STUDIO_SKIP_UPDATE_CHECK = '1'
+          $env:STUDIO_SKIP_AUTO_BACKUP = '1'
+          $env:STUDIO_DATA_DIR = Join-Path $env:RUNNER_TEMP 'health-data'
+          $env:STUDIO_KEY_DIR = Join-Path $env:RUNNER_TEMP 'health-keys'
+          $node = Join-Path $target '.runtime\node.exe'
+          $proc = Start-Process -FilePath $node -ArgumentList 'server.js' -WorkingDirectory $target -WindowStyle Hidden -PassThru
+          try {
+            $health = $null
+            for ($i = 0; $i -lt 40; $i++) {
+              try {
+                $health = Invoke-RestMethod 'http://127.0.0.1:3891/api/health' -TimeoutSec 1
+                if ($health.ok) { break }
+              } catch { Start-Sleep -Milliseconds 500 }
+            }
+            if (!$health.ok -or $health.version -ne '2.9.0') { throw 'Installed health/version check failed' }
+            if ($health.appRoot -ne $target.Replace('\','/')) { throw 'Incorrect installed root' }
+            $health | ConvertTo-Json
+          } finally {
+            if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+      - name: Create portable ZIP including hidden runtime
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory((Resolve-Path 'dist/studio-inventory-win').Path, (Join-Path $PWD 'dist/Studio-Inventory-v2.9.0-Windows.zip'))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Studio-Inventory-v2.9.0-Windows
+          path: dist/Studio-Inventory-v2.9.0-*
+          compression-level: 0
+          retention-days: 14

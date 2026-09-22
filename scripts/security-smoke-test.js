@@ -10,6 +10,7 @@ const { spawn } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.SECURITY_SMOKE_PORT || 3856);
 const DATA_DIR = path.join(ROOT, 'data', '.security-smoke-test');
+const KEY_DIR = path.join(ROOT, 'data', '.security-smoke-keys');
 const PIN = 'Security-Smoke-3856';
 
 function assert(condition, message) {
@@ -89,11 +90,15 @@ function multipartImage(filename = 'probe.html') {
 async function main() {
   if (fs.existsSync(DATA_DIR)) fs.rmSync(DATA_DIR, { recursive: true, force: true });
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.rmSync(KEY_DIR, { recursive: true, force: true });
+  fs.mkdirSync(KEY_DIR, { recursive: true });
   const env = {
     ...process.env,
     PORT: String(PORT),
     STUDIO_DATA_DIR: DATA_DIR,
-    STUDIO_SKIP_UPDATE_CHECK: '1'
+    STUDIO_KEY_DIR: KEY_DIR,
+    STUDIO_SKIP_UPDATE_CHECK: '1',
+    STUDIO_SKIP_AUTO_BACKUP: '1'
   };
 
   await new Promise((resolve, reject) => {

@@ -11,6 +11,7 @@ import { renderItemForm, collectFormData, bindAutoEstimate, bindBrandSuggest, bi
 import { findItemProfile } from './lib/item-profiles.js';
 import { renderBrandsPage, renderBrandItems } from './views/brands.js';
 import { renderReports, renderInsurance, generatePdf } from './views/reports.js';
+import { insurancePdfTables } from './lib/insurance-rows.mjs';
 import { renderManuals } from './views/manuals.js';
 import { renderAbout, renderBackup } from './views/about.js';
 import { renderLabelsPage, bindLabelsPageEvents, printSingleItemLabel } from './views/labels.js';
@@ -210,6 +211,8 @@ function updateSidebarVersion(health) {
   const version = health.version ? `v${health.version}` : '';
   const count = Number.isFinite(Number(health.itemCount)) ? `${health.itemCount} items` : '';
   label.textContent = [count, version].filter(Boolean).join(' · ') || 'Studio Inventory';
+  const aboutVersion = document.getElementById('about-app-version');
+  if (aboutVersion) aboutVersion.textContent = version;
 }
 
 function setupMobileNav() {
@@ -224,46 +227,92 @@ function setupMobileNav() {
   });
 }
 
-async function checkForAppUpdate() {
+async function checkForAppUpdate(force = false) {
+  const button = document.getElementById('app-check-updates');
+  const status = document.getElementById('app-update-status');
+  const download = document.getElementById('app-download-update');
+  const notes = document.getElementById('app-update-notes');
+  if (button) button.disabled = true;
+  if (status) status.textContent = 'Checking TerkWerX for updates…';
+  download?.classList.add('hidden');
+  if (notes) notes.textContent = '';
   try {
-    const info = await api.updateCheck();
-    if (!info.updateAvailable || !info.latestVersion) return;
+    const info = await api.updateCheck(force);
+    document.getElementById('update-banner')?.classList.add('hidden');
+    if (info.error) throw new Error(info.error);
+    if (info.skipped) {
+      if (status) status.textContent = 'Update checks are disabled on this server.';
+      return;
+    }
+    if (!info.latestVersion) throw new Error('No release information was returned.');
+    if (status) status.textContent = info.updateAvailable
+      ? `Version ${info.latestVersion} is available. You have ${info.currentVersion}.${info.installer ? '' : ' No compatible installer is published for this server’s platform yet.'}${info.local === false ? ' Install the update on the studio computer running the server, not this phone or tablet.' : ''}`
+      : `You’re up to date. Installed: ${info.currentVersion}; latest on TerkWerX: ${info.latestVersion}.`;
+    if (!info.updateAvailable) return;
+    if (notes) notes.textContent = info.releaseNotes || '';
+    if (download) {
+      download.classList.remove('hidden');
+      download.textContent = info.installer ? 'Get Update' : 'View Downloads';
+      download.onclick = () => guideAppUpdate(info);
+    }
 
     const dismissed = localStorage.getItem('dismissedUpdateVersion');
-    if (dismissed === info.latestVersion) return;
+    if (!force && dismissed === info.latestVersion) return;
 
     const banner = document.getElementById('update-banner');
     const text = document.getElementById('update-banner-text');
-    text.textContent = `Studio Inventory v${info.latestVersion} is available (you have v${info.currentVersion}). Your inventory data is kept when you install the update.`;
+    text.textContent = `Studio Inventory v${info.latestVersion} is available from TerkWerX (you have v${info.currentVersion}). Get the download and update instructions.`;
 
-    document.getElementById('update-banner-download').onclick = () => {
-      window.open(info.releaseUrl, '_blank', 'noopener');
-    };
+    document.getElementById('update-banner-download').onclick = () => guideAppUpdate(info);
     document.getElementById('update-banner-dismiss').onclick = () => {
       localStorage.setItem('dismissedUpdateVersion', info.latestVersion);
       banner.classList.add('hidden');
     };
 
     banner.classList.remove('hidden');
-  } catch {
-    /* offline or GitHub unreachable */
+  } catch (error) {
+    if (status) status.textContent = `Could not check TerkWerX for updates. Your installed app still works. Try again when connected. (${error.message})`;
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
-function showBackupBanner() {
-  const last = localStorage.getItem('lastBackup');
-  const week = 7 * 24 * 60 * 60 * 1000;
-  if (!last || Date.now() - parseInt(last, 10) > week) {
-    document.getElementById('backup-banner').classList.remove('hidden');
+async function guideAppUpdate(info) {
+  if (!info.installer) {
+    window.open(info.releaseUrl, '_blank', 'noopener');
+    return;
   }
+  const steps = info.platform === 'win32'
+    ? 'Run the downloaded Setup.exe and choose the same installation folder. Then launch Studio Inventory again.'
+    : info.platform === 'darwin'
+      ? 'Open the downloaded disk image and run Install Studio Inventory.command. Then start Studio Inventory from Applications.'
+      : 'Extract the downloaded archive and run Install Studio Inventory.sh. Then start Studio Inventory from your applications menu.';
+  const action = await showChoiceModal({
+    title: `Update to Studio Inventory ${info.latestVersion}`,
+    message: `${info.local === false ? 'Update the studio computer running the server, not this device. ' : ''}Save a Full Backup ZIP first. Stop the Studio Inventory server before installing; closing the browser is not enough. ${steps} Your existing data folder is preserved. Download size: ${Math.round(info.installer.size / 1000000)} MB. See Help & About for portable and custom-folder instructions.`,
+    choices: [
+      { id: 'backup', label: 'Back Up First', primary: true },
+      { id: 'download', label: 'Download Installer' },
+      { id: 'website', label: 'Portable Downloads & Instructions' }
+    ]
+  });
+  if (action === 'backup') navigate('backup');
+  if (action === 'download') window.open(info.installer.url, '_blank', 'noopener');
+  if (action === 'website') window.open(info.releaseUrl, '_blank', 'noopener');
+}
+
+function showBackupBanner() {
+  api.backupFolder().then((backup) => {
+    if (backup?.warn) document.getElementById('backup-banner')?.classList.remove('hidden');
+  }).catch(() => {
+    document.getElementById('backup-banner')?.classList.remove('hidden');
+  });
   document.getElementById('backup-banner-dismiss').onclick = () => {
     document.getElementById('backup-banner').classList.add('hidden');
   };
   document.getElementById('backup-banner-export').onclick = () => {
-    api.exportJson();
-    localStorage.setItem('lastBackup', String(Date.now()));
+    navigate('backup');
     document.getElementById('backup-banner').classList.add('hidden');
-    showToast('Backup exported', 'success');
   };
 }
 
@@ -416,7 +465,8 @@ async function navigate(view, params = {}) {
       case 'inventory':
         state.items = await api.items({
           ...state.filters,
-          include_accessories: state.filters.show_accessories ? '1' : undefined
+          include_accessories: state.filters.show_accessories ? '1' : undefined,
+          include_former: state.filters.show_former ? '1' : undefined
         });
         container.innerHTML = renderInventory(state.items, state.meta, state.filters);
         bindInventoryEvents();
@@ -536,21 +586,24 @@ async function navigate(view, params = {}) {
         break;
 
       case 'insurance':
-        state.items = await api.items({ sort: 'value' });
+        state.items = await api.items({ sort: 'value', include_former: '1', include_accessories: '1' });
         container.innerHTML = renderInsurance(state.items);
         bindInsuranceEvents();
         break;
 
       case 'backup': {
-        const [guestSettings, ownerAuth] = await Promise.all([api.guestSettings(), api.authStatus()]);
+        const [guestSettings, ownerAuth, folderBackup] = await Promise.all([
+          api.guestSettings(), api.authStatus(), api.backupFolder()
+        ]);
         state.ownerAuth = ownerAuth;
-        container.innerHTML = renderBackup(guestSettings, ownerAuth);
+        container.innerHTML = renderBackup(guestSettings, ownerAuth, folderBackup);
         bindBackupEvents();
         break;
       }
 
       case 'about':
         container.innerHTML = renderAbout();
+        document.getElementById('app-check-updates').onclick = () => checkForAppUpdate(true);
         break;
     }
 
@@ -662,6 +715,7 @@ function bindInventoryEvents() {
     state.filters.max_value = document.getElementById('filter-max-value').value;
     state.filters.sort = document.getElementById('filter-sort').value;
     state.filters.show_accessories = document.getElementById('filter-show-accessories')?.checked || false;
+    state.filters.show_former = document.getElementById('filter-show-former')?.checked || false;
     navigate('inventory');
   }, 350);
 
@@ -670,6 +724,7 @@ function bindInventoryEvents() {
     document.getElementById(id)?.addEventListener('change', doSearch);
   });
   document.getElementById('filter-show-accessories')?.addEventListener('change', doSearch);
+  document.getElementById('filter-show-former')?.addEventListener('change', doSearch);
   ['filter-min-value', 'filter-max-value'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', doSearch);
   });
@@ -918,16 +973,31 @@ function bindDetailEvents(item) {
     state.editItemId = item.id;
     navigate('item-form');
   });
-  container.querySelector('[data-action="delete-item"]')?.addEventListener('click', async () => {
-    const ok = await showModal({
-      title: 'Delete Item',
-      message: `Are you sure you want to delete "${item.name}"? This cannot be undone.`,
-      confirmText: 'Delete', danger: true
-    });
-    if (ok) {
-      await api.deleteItem(item.id);
-      showToast('Item deleted', 'success');
+  container.querySelector('[data-action="former-item"]')?.addEventListener('click', () => {
+    document.getElementById('former-panel')?.classList.remove('hidden');
+    document.getElementById('former-date')?.focus();
+  });
+  document.getElementById('former-save')?.addEventListener('click', async () => {
+    try {
+      await api.updateItem(item.id, {
+        studio_status: document.getElementById('former-status')?.value || 'sold',
+        disposition_date: document.getElementById('former-date')?.value || '',
+        studio_status_note: document.getElementById('former-note')?.value || ''
+      });
+      showToast('Record kept, and the item left the insured total', 'success');
+      navigate('item-detail', { id: item.id });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+  document.getElementById('erase-item')?.addEventListener('click', async () => {
+    const confirmName = document.getElementById('erase-name')?.value || '';
+    try {
+      await api.deleteItem(item.id, { erase: true, confirmName });
+      showToast('Duplicate erased', 'success');
       navigate('inventory');
+    } catch (err) {
+      showToast(err.message, 'error');
     }
   });
 
@@ -997,13 +1067,14 @@ function bindDetailEvents(item) {
   });
 
   container.querySelector('[data-action="upload-manual"]')?.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
     try {
-      await api.uploadManual(item.id, file);
-      showToast('Document uploaded', 'success');
+      await api.uploadManual(item.id, files);
+      showToast(files.length === 1 ? 'Document uploaded' : `${files.length} documents uploaded`, 'success');
       navigate('item-detail', { id: item.id });
     } catch (err) { showToast(err.message, 'error'); }
+    e.target.value = '';
   });
 
   container.querySelector('[data-action="upload-software"]')?.addEventListener('change', async (e) => {
@@ -1371,10 +1442,21 @@ function bindManualEvents(manuals, items = []) {
     });
   });
 
+  container.querySelectorAll('[data-action="manual-web-search-kind"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      runManualWebSearch(btn.dataset.id, {
+        itemName: btn.dataset.name || '',
+        kind: btn.dataset.kind || 'all',
+        query: ''
+      });
+    });
+  });
+
   container.querySelector('[data-action="manual-web-search-go"]')?.addEventListener('click', (e) => {
     const btn = e.currentTarget;
     runManualWebSearch(btn.dataset.id, {
       itemName: btn.dataset.name || '',
+      kind: state.manualFinder?.kind || 'all',
       query: document.getElementById('manual-web-query')?.value || ''
     });
   });
@@ -1385,6 +1467,7 @@ function bindManualEvents(manuals, items = []) {
     if (!btn) return;
     runManualWebSearch(btn.dataset.id, {
       itemName: btn.dataset.name || '',
+      kind: state.manualFinder?.kind || 'all',
       query: e.currentTarget.value || ''
     });
   });
@@ -1397,7 +1480,7 @@ function bindManualEvents(manuals, items = []) {
 
   container.querySelectorAll('[data-action="archive-manual-result"]').forEach(btn => {
     btn.addEventListener('click', () => {
-      archiveManualResult(btn.dataset.id, btn.dataset.url);
+      archiveManualResult(btn.dataset.id, btn.dataset.url, btn.dataset.description || '');
     });
   });
 
@@ -1600,15 +1683,21 @@ function bindSoftwareDetailEvents(sw) {
   });
 
   container.querySelector('[data-action="delete-software"]')?.addEventListener('click', async () => {
-    const ok = await showModal({
+    const typed = await showModal({
       title: 'Delete software entry?',
-      message: `Remove "${sw.name}" from your catalog? Screenshot and license data will be deleted.`,
+      message: `Type the name to delete "${sw.name}". The license key will be destroyed.`,
       confirmText: 'Delete',
-      danger: true
+      danger: true,
+      prompt: true,
+      promptType: 'text',
+      promptPlaceholder: sw.name
     });
-    if (!ok) return;
+    if (typed !== sw.name) {
+      if (typed != null) showToast('Software was not deleted', 'error');
+      return;
+    }
     try {
-      await api.deleteSoftware(sw.id);
+      await api.deleteSoftware(sw.id, { erase: true, confirmName: typed });
       showToast('Software removed', 'success');
       navigate('software');
     } catch (err) { showToast(err.message, 'error'); }
@@ -2255,11 +2344,13 @@ async function promptImportManualFromInbox(itemId, { itemName = '', onDone } = {
   }
 }
 
-async function runManualWebSearch(itemId, { query = '', itemName = '' } = {}) {
+async function runManualWebSearch(itemId, { query = '', kind = 'all', itemName = '' } = {}) {
   const currentQuery = String(query || '').trim();
+  const currentKind = kind || state.manualFinder?.kind || 'all';
   state.manualFinder = {
     itemId: String(itemId),
     query: currentQuery,
+    kind: currentKind,
     results: [],
     scans: {},
     searched: true,
@@ -2268,11 +2359,12 @@ async function runManualWebSearch(itemId, { query = '', itemName = '' } = {}) {
   if (state.view !== 'manuals') await navigate('manuals');
 
   try {
-    showToast(`Searching manuals${itemName ? ` for ${itemName}` : ''}...`, 'info');
-    const found = await api.findManualsOnline(itemId, currentQuery);
+    showToast(`Looking up documents${itemName ? ` for ${itemName}` : ''}...`, 'info');
+    const found = await api.findManualsOnline(itemId, currentQuery, currentKind);
     state.manualFinder = {
       itemId: String(itemId),
       query: found.query || currentQuery,
+      kind: found.kind || currentKind,
       results: Array.isArray(found.results) ? found.results : [],
       scans: {},
       searched: true,
@@ -2309,10 +2401,10 @@ async function scanManualResultPage(itemId, url) {
   }
 }
 
-async function archiveManualResult(itemId, url) {
+async function archiveManualResult(itemId, url, description = '') {
   try {
-    showToast('Saving manual into Studio Inventory...', 'info');
-    await api.archiveManual(itemId, url);
+    showToast('Downloading document onto this item...', 'info');
+    await api.archiveManual(itemId, url, description);
     showToast('Manual saved to this item', 'success');
     state.manualFinder = { itemId: null, query: '', results: [], scans: {}, searched: false, error: '' };
     await navigate('manuals');
@@ -2529,15 +2621,18 @@ function bindReportEvents() {
 function bindInsuranceEvents() {
   document.getElementById('export-insurance-pdf')?.addEventListener('click', () => {
     const fmt = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-    const rows = state.items.map(i => [
-      i.name, i.brand, i.model, i.serial_number, i.year, i.location,
-      i.condition, fmt(i.purchase_price), fmt(i.replacement_value * i.quantity)
-    ]);
-    const total = state.items.reduce((s, i) => s + i.replacement_value * i.quantity, 0);
-    generatePdf('Insurance Report', ['Name', 'Brand', 'Model', 'Serial', 'Year', 'Location', 'Condition', 'Purchase', 'Replacement'], rows, {
-      count: state.items.length,
+    const tables = insurancePdfTables(state.items, fmt);
+    const total = state.items
+      .filter(i => !['sold', 'stolen', 'destroyed', 'given_away'].includes(i.studio_status))
+      .reduce((s, i) => s + i.replacement_value * i.quantity, 0);
+    generatePdf('Insurance Report', tables.ownedHeaders, tables.ownedRows, {
+      count: tables.ownedRows.length,
       purchase: '',
       replacement: fmt(total)
+    }, {
+      title: 'No longer owned',
+      headers: tables.formerHeaders,
+      rows: tables.formerRows
     });
   });
 }
@@ -2614,20 +2709,97 @@ function bindBackupEvents() {
     }
   });
 
+  document.getElementById('backup-folder-save')?.addEventListener('click', async () => {
+    const dir = document.getElementById('backup-folder-path')?.value || '';
+    const status = document.getElementById('backup-folder-status');
+    try {
+      const saved = await api.setBackupFolder(dir);
+      if (status) status.textContent = `Backup folder saved. ${saved.dir}`;
+      showToast('Backup folder saved', 'success');
+    } catch (err) {
+      if (status) status.textContent = err.message;
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-recovery-confirm')?.addEventListener('click', async () => {
+    try {
+      await api.confirmRecoveryKey(document.getElementById('backup-recovery-type')?.value || '');
+      showToast('Recovery key confirmed', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-move-leftovers')?.addEventListener('click', async () => {
+    try {
+      await api.moveBackupLeftovers();
+      showToast('Leftover files moved to the backup folder', 'success');
+      navigate('backup');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-encrypt')?.addEventListener('click', async () => {
+    try {
+      await api.encryptCatalog();
+      showToast('Catalog encrypted', 'success');
+      navigate('backup');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-recovery-show')?.addEventListener('click', async () => {
+    const box = document.getElementById('backup-recovery-key');
+    try {
+      const result = await api.recoveryKey();
+      if (box) {
+        box.hidden = false;
+        box.value = result.recoveryKey || '';
+      }
+      showToast('Recovery key is visible on this page only', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-recovery-copy')?.addEventListener('click', async () => {
+    const status = document.getElementById('backup-folder-status');
+    try {
+      const result = await api.refreshRecoveryCopy();
+      if (status) status.textContent = result.recoveryReady ? 'Recovery ZIP is in the backup folder.' : 'Recovery copy was not written.';
+      showToast('Recovery copy written', 'success');
+    } catch (err) {
+      if (status) status.textContent = err.message;
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-folder-run')?.addEventListener('click', async () => {
+    const status = document.getElementById('backup-folder-status');
+    try {
+      const result = await api.runFolderBackup();
+      if (status) status.textContent = `Last folder backup: ${result.lastAt || 'just now'}`;
+      showToast('Folder backup written', 'success');
+    } catch (err) {
+      if (status) status.textContent = err.message;
+      showToast(err.message, 'error');
+    }
+  });
+
   document.getElementById('backup-export-full')?.addEventListener('click', () => {
     api.exportFullBackup();
-    localStorage.setItem('lastBackup', String(Date.now()));
-    showToast('Full backup exported', 'success');
+    showToast('Full backup download started', 'success');
   });
 
   document.getElementById('backup-export-json')?.addEventListener('click', () => {
     api.exportJson();
-    localStorage.setItem('lastBackup', String(Date.now()));
     showToast('JSON exported', 'success');
   });
   document.getElementById('backup-export-sql')?.addEventListener('click', () => {
     api.exportSql();
-    localStorage.setItem('lastBackup', String(Date.now()));
     showToast('SQL dump exported', 'success');
   });
   document.getElementById('backup-export-csv')?.addEventListener('click', () => api.exportCsv());
@@ -2697,16 +2869,25 @@ function bindBackupEvents() {
       const text = await file.text();
       const data = JSON.parse(text);
       const replace = document.getElementById('import-replace').checked;
+      let confirmPhrase = '';
       if (replace) {
-        const ok = await showModal({
-          title: 'Replace Inventory Catalog?',
-          message: 'This replaces inventory catalog records with the JSON import. Use a Full Backup ZIP when you also need to restore media and studio layouts. Continue?',
-          confirmText: 'Replace Catalog',
-          danger: true
+        const typed = await showModal({
+          title: 'Replace inventory catalog?',
+          message: 'This deletes every item, the value history, and the edit log. Type replace the catalog to continue.',
+          confirmText: 'Replace catalog',
+          danger: true,
+          prompt: true,
+          promptType: 'text',
+          promptPlaceholder: 'replace the catalog'
         });
-        if (!ok) return;
+        if (typed !== 'replace the catalog') {
+          showToast('Catalog was not replaced', 'error');
+          e.target.value = '';
+          return;
+        }
+        confirmPhrase = typed;
       }
-      const result = await api.importJson(data, replace);
+      const result = await api.importJson(data, replace, confirmPhrase);
       document.getElementById('import-status').textContent = `Imported ${result.imported} items successfully.`;
       showToast(`Imported ${result.imported} items`, 'success');
       navigate('dashboard');

@@ -11,6 +11,7 @@ const ROOT = path.join(__dirname, '..');
 const PORT = process.env.BROWSER_SMOKE_PORT || 3853;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DATA_DIR = path.join(ROOT, 'data', '.browser-smoke-test');
+const KEY_DIR = path.join(ROOT, 'data', '.browser-smoke-keys');
 const BROWSER_ENGINE = process.env.BROWSER_ENGINE || 'chromium';
 
 function assert(cond, msg) {
@@ -36,8 +37,10 @@ async function seedAndStartServer() {
     try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* win lock */ }
   }
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.rmSync(KEY_DIR, { recursive: true, force: true });
+  fs.mkdirSync(KEY_DIR, { recursive: true });
 
-  const env = { ...process.env, PORT: String(PORT), STUDIO_DATA_DIR: DATA_DIR };
+  const env = { ...process.env, PORT: String(PORT), STUDIO_DATA_DIR: DATA_DIR, STUDIO_KEY_DIR: KEY_DIR, STUDIO_SKIP_AUTO_BACKUP: '1' };
   await new Promise((resolve, reject) => {
     const seed = spawn('node', ['seed.js', '--force'], { cwd: ROOT, env, stdio: 'inherit' });
     seed.on('close', c => (c === 0 ? resolve() : reject(new Error('seed failed'))));
@@ -158,13 +161,51 @@ async function main() {
           calibrated: true
         })
       });
+      const created = await fetch('/api/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Pin Test Mic',
+          category: 'Microphone',
+          location: fp.location,
+          replacement_value: 10
+        })
+      }).then(r => r.json());
+      await fetch(`/api/floorplans/${fp.id}/items`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{ item_id: created.id, x_pct: 20, y_pct: 20, placement: 'floor', icon_mode: 'logo' }]
+        })
+      });
       return fp.id;
     });
     assert(fpId, 'floorplan id for studio view wall test');
 
     await navTo(page, 'studio-view', '.studio-browse');
     await page.selectOption('#studio-browse-room', String(fpId));
-    await page.waitForSelector(`[data-studio-browse-fp="${fpId}"]`, { timeout: 10000 });
+    await page.waitForSelector(`[data-studio-browse-fp="${fpId}"] .studio-browse-pin`, { timeout: 10000 });
+    await page.evaluate(() => {
+      const map = document.getElementById('studio-browse-map');
+      map.style.width = '800px';
+      map.style.height = '360px';
+    });
+    await page.waitForTimeout(80);
+    const pinCheck = await page.evaluate(() => {
+      const pin = document.querySelector('.studio-browse-pin');
+      const poly = document.querySelector('.floorplan-room-fill');
+      const pinBox = pin.getBoundingClientRect();
+      const polyBox = poly.getBoundingClientRect();
+      const cx = pinBox.left + pinBox.width / 2;
+      const cy = pinBox.top + pinBox.height / 2;
+      return {
+        inside: cx >= polyBox.left && cx <= polyBox.right && cy >= polyBox.top && cy <= polyBox.bottom,
+        cx, cy,
+        polyLeft: polyBox.left, polyRight: polyBox.right, polyTop: polyBox.top, polyBottom: polyBox.bottom
+      };
+    });
+    assert(pinCheck.inside, `studio pin landed outside the room (${JSON.stringify(pinCheck)})`);
+    console.log('✓ studio view pin stays inside the room');
     await page.click('[data-studio-wall="0"]');
     await page.waitForSelector('#wall-elevation-overlay:not(.hidden)', { timeout: 20000 });
     await page.waitForFunction(() => {
@@ -230,7 +271,7 @@ async function main() {
     console.log('✓ backup / guest settings');
 
     await navTo(page, 'item-form', '#item-form');
-    assert(await page.locator('#depreciated_value').count() === 1, 'depreciated field missing on form');
+    assert(await page.locator('#depreciated_value').count() === 0, 'depreciated field should stay off the form');
     assert(await page.locator('#parent_item_id').count() === 1, 'parent item field missing');
     assert(await page.locator('#on_insurance_policy').count() === 1, 'insurance flag missing');
     assert(await page.locator('#label-scan-file').count() === 1, 'label scan input missing');

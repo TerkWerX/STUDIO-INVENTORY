@@ -7,11 +7,23 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 const Tesseract = require('tesseract.js');
+const dbApi = require('./db');
+if (dbApi.catalogLock) {
+  require('./lib/move-catalog').listen({
+    port: Number(process.env.PORT || 3847),
+    message: dbApi.catalogLock,
+    dbPath: dbApi.DB_PATH,
+    dataDir: dbApi.DATA_DIR
+  });
+  return;
+}
 const {
   db, DB_PATH, DATA_DIR, UPLOADS_DIR, initSchema,
   enrichItem, setItemTags, sanitizeItemInput, getTagsForItem, getAssemblyTotals, itemUploadDir,
   removeItemUploadDirs, DEFAULT_CATEGORIES, DEFAULT_LOCATIONS,
   ensureBrand, getBrandsWithCounts, syncBrandsFromItems, brandSlug, LOGOS_DIR,
+  isFormerStatus, ownedStatusSql, cascadeFormerStatus, restoreCascadedChildren,
+  recordItemChanges, recordReplacementValue, getValueEvents, getItemAudit,
   addMaintenanceEntry, deleteMaintenanceEntry,
   getActiveLoans, getRecentLoanHistory, checkoutItem, returnLoan, deleteLoanEntry,
   getRacks, getSignalChains,
@@ -29,13 +41,17 @@ const { summarizeCompleteness, computeItemCompleteness } = require('./lib/comple
 const { parseCsv, mapRowToItem } = require('./lib/csv-import');
 const { instrumentProfiles } = require('./lib/instrument-profiles');
 const {
-  readSettings, writeSettings, regenerateGuestToken, isValidGuestToken,
+  readSettings, writeSettings, commitCatalogEncryption, regenerateGuestToken, isValidGuestToken,
   setOwnerPin, verifyOwnerPin, createOwnerSessionToken, revokeOwnerSessionToken,
   isValidOwnerSessionToken, itemScanToken, isValidItemScanToken, ownerPinConfigured
 } = require('./lib/studio-settings');
 const { indexManualAttachment, searchManuals, pdfParseAvailable } = require('./lib/pdf-index');
+const { findGearDocuments, DOCUMENT_KINDS } = require('./lib/manual-finder');
 const { fetchBrandLogoFromWeb, fetchAllInventoryBrandLogos } = require('./lib/fetch-brand-logo');
 const { getCurrentVersion, checkForUpdate } = require('./lib/version');
+const { validateBackupDir, backupDiskWarning, writeFolderBackup, writeRecoveryCopy, buildDownloadZip, readBackupZip, RECOVERY_NAME, RECOVERY_PREVIOUS_NAME } = require('./lib/folder-backup');
+const { isPlainSqlite } = require('./lib/open-database');
+const { getDataKey } = require('./lib/data-key');
 const QRCode = require('qrcode');
 
 const PORT = process.env.PORT || 3847;
@@ -350,6 +366,9 @@ function buildSearchQuery(params) {
   if (params.parent_id) {
     conditions.push('i.parent_item_id = @parent_id');
     values.parent_id = parseInt(params.parent_id, 10);
+  }
+  if (params.include_former !== '1' && params.include_former !== 'true' && !params.parent_id) {
+    conditions.push(ownedStatusSql('i.studio_status'));
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -780,7 +799,8 @@ app.get('/api/update-check', async (req, res) => {
   if (!isLocalRequest(req) && !isValidOwnerToken(ownerTokenFromRequest(req))) {
     return res.status(401).json({ error: 'Owner PIN required for update checks.' });
   }
-  res.json(await checkForUpdate());
+  res.set('Cache-Control', 'no-store');
+  res.json({ ...await checkForUpdate({ force: req.query.force === '1' }), local: isLocalRequest(req) });
 });
 
 function isLocalRequest(req) {
@@ -944,14 +964,19 @@ app.get('/api/stats', (_req, res) => {
   const totals = db.prepare(`
     SELECT COUNT(*) as item_count, COALESCE(SUM(quantity),0) as total_quantity,
       COALESCE(SUM(purchase_price*quantity),0) as total_purchase,
-      COALESCE(SUM(replacement_value*quantity),0) as total_replacement FROM items
+      COALESCE(SUM(replacement_value*quantity),0) as total_replacement,
+      COALESCE(SUM(CASE WHEN parent_item_id IS NULL THEN replacement_value*quantity ELSE 0 END),0) as top_level_replacement,
+      COALESCE(SUM(CASE WHEN parent_item_id IS NOT NULL THEN replacement_value*quantity ELSE 0 END),0) as nested_replacement
+    FROM items
+    WHERE ${ownedStatusSql('studio_status')}
   `).get();
-  const allItems = db.prepare('SELECT * FROM items ORDER BY name').all().map(enrichItem);
+  const allItems = db.prepare(`SELECT * FROM items WHERE ${ownedStatusSql('studio_status')} ORDER BY name`).all().map(enrichItem);
   const completeness = summarizeCompleteness(allItems);
   const warrantyExpiring = db.prepare(`
     SELECT id, name, category, warranty_end_date, warranty_note, replacement_value
     FROM items
-    WHERE warranty_end_date != ''
+    WHERE ${ownedStatusSql('studio_status')}
+      AND warranty_end_date != ''
       AND date(warranty_end_date) >= date('now')
       AND date(warranty_end_date) <= date('now', '+30 days')
     ORDER BY warranty_end_date ASC
@@ -960,7 +985,8 @@ app.get('/api/stats', (_req, res) => {
   const awayItems = db.prepare(`
     SELECT id, name, category, studio_status, studio_status_note, location
     FROM items
-    WHERE studio_status != 'in_studio'
+    WHERE ${ownedStatusSql('studio_status')}
+      AND studio_status != 'in_studio'
     ORDER BY name ASC
     LIMIT 20
   `).all();
@@ -970,10 +996,10 @@ app.get('/api/stats', (_req, res) => {
   const softwareRenewals = getSoftwareRenewals(30);
   res.json({
     totals,
-    byCategory: db.prepare(`SELECT category, COUNT(*) as count, COALESCE(SUM(replacement_value*quantity),0) as total_value FROM items GROUP BY category ORDER BY total_value DESC`).all(),
-    byLocation: db.prepare(`SELECT location, COUNT(*) as count, COALESCE(SUM(replacement_value*quantity),0) as total_value FROM items GROUP BY location ORDER BY count DESC`).all(),
-    recent: db.prepare(`SELECT id,name,category,replacement_value,created_at FROM items ORDER BY created_at DESC LIMIT 5`).all(),
-    highValue: db.prepare(`SELECT id,name,category,replacement_value,serial_number FROM items WHERE replacement_value>=500 ORDER BY replacement_value DESC LIMIT 10`).all(),
+    byCategory: db.prepare(`SELECT category, COUNT(*) as count, COALESCE(SUM(replacement_value*quantity),0) as total_value FROM items WHERE ${ownedStatusSql('studio_status')} GROUP BY category ORDER BY total_value DESC`).all(),
+    byLocation: db.prepare(`SELECT location, COUNT(*) as count, COALESCE(SUM(replacement_value*quantity),0) as total_value FROM items WHERE ${ownedStatusSql('studio_status')} GROUP BY location ORDER BY count DESC`).all(),
+    recent: db.prepare(`SELECT id,name,category,replacement_value,created_at FROM items WHERE ${ownedStatusSql('studio_status')} ORDER BY created_at DESC LIMIT 5`).all(),
+    highValue: db.prepare(`SELECT id,name,category,replacement_value,serial_number FROM items WHERE ${ownedStatusSql('studio_status')} AND replacement_value>=500 ORDER BY replacement_value DESC LIMIT 10`).all(),
     completeness,
     warrantyExpiring,
     awayItems,
@@ -983,7 +1009,8 @@ app.get('/api/stats', (_req, res) => {
     softwareTotals,
     softwareRenewals,
     softwareRenewalCount: softwareRenewals.length,
-    softwareOverdueCount: softwareRenewals.filter(s => s.overdue).length
+    softwareOverdueCount: softwareRenewals.filter(s => s.overdue).length,
+    backup: backupPublicStatus()
   });
 });
 
@@ -1043,6 +1070,7 @@ app.get('/api/guest/:token/items/:id', guestMiddleware, (req, res) => {
 app.get('/api/guest/:token/stats', guestMiddleware, (_req, res) => {
   const totals = db.prepare(`
     SELECT COUNT(*) as item_count, COALESCE(SUM(replacement_value*quantity),0) as total_replacement FROM items
+    WHERE ${ownedStatusSql('studio_status')}
   `).get();
   res.json({ totals, readOnly: true });
 });
@@ -1161,14 +1189,14 @@ app.get('/api/studio/map', (_req, res) => {
   const locations = db.prepare(`
     SELECT location, COUNT(*) as item_count,
       COALESCE(SUM(replacement_value * quantity), 0) as total_value
-    FROM items WHERE parent_item_id IS NULL
+    FROM items WHERE parent_item_id IS NULL AND ${ownedStatusSql('studio_status')}
     GROUP BY location ORDER BY total_value DESC
   `).all();
   const zones = locations.map(loc => ({
     ...loc,
     items: db.prepare(`
       SELECT id, name, category, brand, model, replacement_value, studio_status
-      FROM items WHERE location = ? AND parent_item_id IS NULL
+      FROM items WHERE location = ? AND parent_item_id IS NULL AND ${ownedStatusSql('studio_status')}
       ORDER BY replacement_value DESC, name ASC
     `).all(loc.location || '')
   }));
@@ -1454,6 +1482,12 @@ app.put('/api/software/:id', (req, res) => {
 });
 
 app.delete('/api/software/:id', (req, res) => {
+  const existing = getSoftware(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Software license not found' });
+  const erase = req.body?.erase === true || req.body?.erase === 'true';
+  if (!erase || String(req.body?.confirmName || '') !== existing.name) {
+    return res.status(400).json({ error: 'Type the software name to delete it.' });
+  }
   try {
     deleteSoftware(req.params.id);
     res.json({ ok: true });
@@ -1542,7 +1576,12 @@ app.get('/api/items', (req, res) => {
 app.get('/api/items/:id', (req, res) => {
   const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
-  res.json({ ...enrichItem(item), assembly_totals: getAssemblyTotals(item.id) });
+  res.json({
+    ...enrichItem(item),
+    assembly_totals: getAssemblyTotals(item.id),
+    value_events: getValueEvents(item.id),
+    audit: getItemAudit(item.id)
+  });
 });
 
 app.get('/api/items/:id/scan-link', (req, res) => {
@@ -1614,8 +1653,9 @@ function validateParentLink(itemId, parentId) {
 }
 
 app.post('/api/items', (req, res) => {
-  const data = sanitizeItemInput(req.body);
+  let data;
   try {
+    data = sanitizeItemInput(req.body);
     validateParentLink(null, data.parent_item_id);
   } catch (err) {
     return res.status(400).json({ error: err.message });
@@ -1624,18 +1664,24 @@ app.post('/api/items', (req, res) => {
     INSERT INTO items (name,common_name,category,instrument_type,instrument_specs_json,brand,model,serial_number,year,
       purchase_date,purchase_price,replacement_value,replacement_value_note,
       condition,condition_notes,location,description,quantity,update_checks_enabled,
-      warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
+      warranty_end_date,warranty_note,studio_status,studio_status_note,disposition_date,value_updated_at,
       parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
       requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes)
     VALUES (@name,@common_name,@category,@instrument_type,@instrument_specs_json,@brand,@model,@serial_number,@year,
       @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
       @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
-      @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
+      @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,@disposition_date,
       CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END,
       @parent_item_id,@depreciated_value,@on_insurance_policy,@insurance_policy_note,
       @requires_power,@power_adapter_voltage,@power_adapter_current,@power_adapter_polarity,@power_adapter_notes)
   `).run(data);
+  if (Number(data.replacement_value) > 0) {
+    recordReplacementValue(result.lastInsertRowid, data.replacement_value, data.replacement_value_note);
+  }
   setItemTags(result.lastInsertRowid, req.body.tags || []);
+  if (isFormerStatus(data.studio_status)) {
+    cascadeFormerStatus(result.lastInsertRowid, data.studio_status, data.studio_status_note, data.disposition_date);
+  }
   if (data.brand) queueBrandLogoFetch(data.brand);
   res.status(201).json(enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(result.lastInsertRowid)));
 });
@@ -1645,8 +1691,9 @@ app.put('/api/items/:id', (req, res) => {
   if (!existingItem)
     return res.status(404).json({ error: 'Item not found' });
   const merged = { ...existingItem, ...(req.body || {}) };
-  const data = sanitizeItemInput(merged);
+  let data;
   try {
+    data = sanitizeItemInput(merged);
     validateParentLink(req.params.id, data.parent_item_id);
   } catch (err) {
     return res.status(400).json({ error: err.message });
@@ -1661,7 +1708,7 @@ app.put('/api/items/:id', (req, res) => {
       condition_notes=@condition_notes,location=@location,description=@description,
       quantity=@quantity,update_checks_enabled=@update_checks_enabled,
       warranty_end_date=@warranty_end_date,warranty_note=@warranty_note,
-      studio_status=@studio_status,studio_status_note=@studio_status_note,
+      studio_status=@studio_status,studio_status_note=@studio_status_note,disposition_date=@disposition_date,
       parent_item_id=@parent_item_id,depreciated_value=@depreciated_value,
       on_insurance_policy=@on_insurance_policy,insurance_policy_note=@insurance_policy_note,
       requires_power=@requires_power,power_adapter_voltage=@power_adapter_voltage,
@@ -1671,17 +1718,32 @@ app.put('/api/items/:id', (req, res) => {
         THEN datetime('now') ELSE value_updated_at END,
       updated_at=datetime('now') WHERE id=@id
   `).run({ ...data, id: req.params.id, value_changed: valueChanged ? 1 : 0 });
+  if (valueChanged) {
+    recordReplacementValue(req.params.id, data.replacement_value, data.replacement_value_note);
+  }
+  recordItemChanges(req.params.id, existingItem, data);
   const tagNames = Object.prototype.hasOwnProperty.call(req.body || {}, 'tags')
     ? req.body.tags
     : getTagsForItem(req.params.id).map(t => t.name);
   setItemTags(req.params.id, tagNames || []);
+  if (isFormerStatus(data.studio_status) && !isFormerStatus(existingItem.studio_status)) {
+    cascadeFormerStatus(req.params.id, data.studio_status, data.studio_status_note, data.disposition_date);
+  } else if (!isFormerStatus(data.studio_status) && isFormerStatus(existingItem.studio_status)) {
+    restoreCascadedChildren(req.params.id, existingItem);
+  }
   if (data.brand) queueBrandLogoFetch(data.brand);
   res.json(enrichItem(db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id)));
 });
 
 app.delete('/api/items/:id', (req, res) => {
-  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
-    return res.status(404).json({ error: 'Item not found' });
+  const existing = db.prepare('SELECT id, name FROM items WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Item not found' });
+  const erase = req.body?.erase === true || req.body?.erase === 'true';
+  if (!erase || String(req.body?.confirmName || '') !== existing.name) {
+    return res.status(400).json({
+      error: 'Type the item name to erase a duplicate. Use No longer owned to record a sale, theft, or gift.'
+    });
+  }
   removeItemUploadDirs(req.params.id);
   db.prepare('DELETE FROM items WHERE id=?').run(req.params.id);
   res.json({ ok: true });
@@ -1775,13 +1837,13 @@ app.post('/api/import/csv', express.text({ type: ['text/csv', 'text/plain', 'app
       INSERT INTO items (name,common_name,category,instrument_type,instrument_specs_json,brand,model,serial_number,year,
         purchase_date,purchase_price,replacement_value,replacement_value_note,
         condition,condition_notes,location,description,quantity,update_checks_enabled,
-        warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
+        warranty_end_date,warranty_note,studio_status,studio_status_note,disposition_date,value_updated_at,
         parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
         requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes)
       VALUES (@name,@common_name,@category,@instrument_type,@instrument_specs_json,@brand,@model,@serial_number,@year,
         @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
         @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
-        @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,
+        @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,@disposition_date,
         CASE WHEN @replacement_value > 0 THEN datetime('now') ELSE NULL END,
         @parent_item_id,@depreciated_value,@on_insurance_policy,@insurance_policy_note,
         @requires_power,@power_adapter_voltage,@power_adapter_current,@power_adapter_polarity,@power_adapter_notes)
@@ -1794,6 +1856,9 @@ app.post('/api/import/csv', express.text({ type: ['text/csv', 'text/plain', 'app
         try {
           const { data, tags } = mapRowToItem(rows[i], sanitizeItemInput);
           const result = insert.run(data);
+          if (Number(data.replacement_value) > 0) {
+            recordReplacementValue(result.lastInsertRowid, data.replacement_value, data.replacement_value_note);
+          }
           setItemTags(result.lastInsertRowid, tags);
           if (data.brand) ensureBrand(data.brand);
           imported++;
@@ -1818,15 +1883,24 @@ app.post('/api/items/:id/photos', photoUpload.array('files', 20), (req, res) => 
   res.status(201).json(created);
 });
 
-app.post('/api/items/:id/manuals', manualUpload.single('file'), async (req, res) => {
-  if (!db.prepare('SELECT id FROM items WHERE id=?').get(req.params.id))
-    return res.status(404).json({ error: 'Item not found' });
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const docType = req.file.mimetype === 'application/pdf' ? 'manual' : 'document';
-  const att = insertAttachment(req.params.id, req.file, docType);
-  const item = db.prepare('SELECT name FROM items WHERE id=?').get(req.params.id);
-  try { await indexManualAttachment(db, att, item?.name, UPLOADS_DIR); } catch { /* ignore */ }
-  res.status(201).json(att);
+app.post('/api/items/:id/manuals', manualUpload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'files', maxCount: 12 }
+]), async (req, res) => {
+  const item = db.prepare('SELECT id, name FROM items WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const incoming = [...(req.files?.file || []), ...(req.files?.files || [])];
+  if (!incoming.length) return res.status(400).json({ error: 'No file uploaded' });
+  const created = [];
+  for (const file of incoming) {
+    const docType = file.mimetype === 'application/pdf' ? 'manual' : 'document';
+    const att = insertAttachment(req.params.id, file, docType, {
+      description: String(req.body?.description || '').slice(0, 500)
+    });
+    try { await indexManualAttachment(db, att, item.name, UPLOADS_DIR); } catch { /* ignore */ }
+    created.push(att);
+  }
+  res.status(201).json(created.length === 1 ? created[0] : created);
 });
 
 app.post('/api/items/:id/manuals/archive', async (req, res) => {
@@ -1839,7 +1913,10 @@ app.post('/api/items/:id/manuals/archive', async (req, res) => {
 
   try {
     const response = await fetch(url, {
-      headers: { 'User-Agent': 'StudioInventory/1.0 (manual archive)' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/pdf,application/octet-stream,*/*'
+      },
       redirect: 'follow',
       signal: AbortSignal.timeout(120000)
     });
@@ -1925,22 +2002,31 @@ app.post('/api/items/:id/manuals/web-search', async (req, res) => {
   const item = db.prepare('SELECT * FROM items WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
 
-  const query = itemManualSearchQuery(item, req.body?.query || '');
-  if (!query) return res.status(400).json({ error: 'Search query required' });
+  const allowedKinds = new Set([...DOCUMENT_KINDS.map((entry) => entry.id), 'all']);
+  const kind = allowedKinds.has(req.body?.kind) ? req.body.kind : 'all';
+  const custom = String(req.body?.query || '').trim();
+  if (!custom && !String(item.brand || item.model || item.name || '').trim()) {
+    return res.status(400).json({ error: 'Add a brand or model before searching for documents' });
+  }
 
   try {
-    const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const response = await fetch(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 StudioInventory/1.0 manual finder',
-        'Accept': 'text/html,application/xhtml+xml'
-      },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(20000)
+    const found = await findGearDocuments(item, {
+      kind,
+      query: custom,
+      fetchText: async (url) => {
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/pdf,application/xhtml+xml'
+          },
+          redirect: 'follow',
+          signal: AbortSignal.timeout(15000)
+        });
+        if (!response.ok) throw new Error(`Document search failed: HTTP ${response.status}`);
+        return response.text();
+      }
     });
-    if (!response.ok) throw new Error(`Manual search failed: HTTP ${response.status}`);
-    const html = await response.text();
-    res.json({ query, results: extractDuckDuckGoResults(html) });
+    res.json({ query: found.query, kind: found.kind, results: found.results });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Manual search failed' });
   }
@@ -2100,11 +2186,15 @@ const BACKUP_TABLES = [
   'signal_chain_items',
   'floorplans',
   'floorplan_items',
-  'software_licenses'
+  'software_licenses',
+  'item_value_events',
+  'item_audit'
 ];
 
 const BACKUP_DELETE_ORDER = [
   'manual_fts',
+  'item_value_events',
+  'item_audit',
   'floorplan_items',
   'signal_chain_items',
   'rack_items',
@@ -2125,28 +2215,50 @@ function tableColumns(table) {
   return db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
 }
 
-function exportBackupData() {
+function backupPublicStatus() {
   const settings = readSettings();
-  const safeSettings = {
-    guestEnabled: !!settings.guestEnabled,
-    guestToken: settings.guestToken || '',
-    // Preserve printed signed QR labels across full-backup restores.
-    scanLinkSecret: settings.scanLinkSecret || ''
-  };
+  const lastAt = settings.autoBackupLastAt || '';
+  const ageMs = lastAt ? Date.now() - Date.parse(lastAt) : null;
+  const configured = !!settings.autoBackupDir;
+  const lastError = settings.autoBackupLastError || '';
+  const recoveryPath = configured ? path.join(settings.autoBackupDir, RECOVERY_NAME) : '';
+  const recoveryPreviousPath = configured ? path.join(settings.autoBackupDir, RECOVERY_PREVIOUS_NAME) : '';
+  let recoveryReady = false;
+  let recoveryPreviousReady = false;
+  if (recoveryPath && fs.existsSync(recoveryPath)) {
+    try { recoveryReady = fs.statSync(recoveryPath).size > 0; } catch { recoveryReady = false; }
+  }
+  if (recoveryPreviousPath && fs.existsSync(recoveryPreviousPath)) {
+    try { recoveryPreviousReady = fs.statSync(recoveryPreviousPath).size > 0; } catch { recoveryPreviousReady = false; }
+  }
   return {
-    manifest: {
-      app: 'Studio Inventory',
-      format: 'studio-inventory-full-backup',
-      version: 1,
-      appVersion: getCurrentVersion(),
-      exportedAt: new Date().toISOString()
-    },
-    settings: safeSettings,
-    tables: Object.fromEntries(BACKUP_TABLES.map(table => [
-      table,
-      db.prepare(`SELECT * FROM ${table}`).all()
-    ]))
+    configured,
+    dir: settings.autoBackupDir || '',
+    keep: Number(settings.autoBackupKeep) || 7,
+    lastAt,
+    lastPath: settings.autoBackupLastPath || '',
+    lastError,
+    recoveryPath,
+    recoveryReady,
+    recoveryPreviousReady,
+    encryptionArmed: settings.catalogEncryption === 'armed',
+    recoveryKeyConfirmed: !!settings.recoveryKeyConfirmed,
+    encryptionBlockers: encryptionBlockers(),
+    leftovers: listPlaintextLeftovers().map(file => path.relative(DATA_DIR, file)),
+    diskWarning: configured ? backupDiskWarning(settings.autoBackupDir, DATA_DIR) : '',
+    warn: !configured || !lastAt || !Number.isFinite(ageMs) || ageMs > 7 * 24 * 60 * 60 * 1000 || !!lastError
   };
+}
+
+async function buildConsistentBackupZip() {
+  return buildDownloadZip({
+    db,
+    settings: readSettings(),
+    appVersion: getCurrentVersion(),
+    tables: BACKUP_TABLES,
+    uploadsDir: UPLOADS_DIR,
+    inboxDir: MANUAL_INBOX_DIR
+  });
 }
 
 function addFolderToZip(zip, dir, archiveRoot) {
@@ -2226,15 +2338,219 @@ function rollbackDirectorySwap(target, rollback, state) {
   }
 }
 
-app.get('/api/export/full', (_req, res) => {
-  const zip = new AdmZip();
-  zip.addFile('backup.json', Buffer.from(JSON.stringify(exportBackupData(), null, 2), 'utf8'));
-  addFolderToZip(zip, UPLOADS_DIR, 'uploads');
-  addFolderToZip(zip, MANUAL_INBOX_DIR, 'manual-inbox');
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="studio-inventory-full-backup-${stamp}.zip"`);
-  res.send(zip.toBuffer());
+app.get('/api/export/full', async (_req, res) => {
+  try {
+    const zip = await buildConsistentBackupZip();
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="studio-inventory-full-backup-${stamp}.zip"`);
+    res.send(zip.toBuffer());
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not build backup ZIP' });
+  }
+});
+
+app.get('/api/backup/folder', (_req, res) => {
+  res.json(backupPublicStatus());
+});
+
+function listPlaintextLeftovers() {
+  const leftovers = [];
+  const backups = path.join(DATA_DIR, 'backups');
+  if (fs.existsSync(backups)) {
+    for (const name of fs.readdirSync(backups)) {
+      const full = path.join(backups, name);
+      if (name.endsWith('.db') && fs.statSync(full).isFile()) leftovers.push(full);
+    }
+  }
+  const cache = path.join(DATA_DIR, 'ocr-cache');
+  if (fs.existsSync(cache)) {
+    for (const name of fs.readdirSync(cache)) {
+      const full = path.join(cache, name);
+      if (fs.statSync(full).isFile()) leftovers.push(full);
+    }
+  }
+  return leftovers;
+}
+
+function encryptionBlockers({ verifyZip = false, skipRecoveryZip = false } = {}) {
+  const settings = readSettings();
+  const blockers = [];
+  if (!settings.autoBackupDir) blockers.push('Choose a backup folder outside the data folder.');
+  else {
+    try { validateBackupDir(settings.autoBackupDir, DATA_DIR); } catch (err) {
+      blockers.push(err.message);
+    }
+  }
+  const recovery = settings.autoBackupDir ? path.join(settings.autoBackupDir, RECOVERY_NAME) : '';
+  if (!skipRecoveryZip && (!recovery || !fs.existsSync(recovery))) {
+    blockers.push('Write the recovery ZIP first.');
+  } else if (verifyZip && recovery && fs.existsSync(recovery)) {
+    try {
+      const zip = new AdmZip(recovery);
+      if (!zip.getEntry('backup.json')) blockers.push('The recovery ZIP is missing backup.json.');
+    } catch {
+      blockers.push('The recovery ZIP could not be read.');
+    }
+  }
+  if (!settings.recoveryKeyConfirmed) blockers.push('Show the recovery key and type it back.');
+  if (listPlaintextLeftovers().length) blockers.push('Move old database copies and label-scan leftovers out of data/.');
+  return blockers;
+}
+
+app.get('/api/backup/recovery-key', (req, res) => {
+  if (!isLocalRequest(req)) {
+    return res.status(403).json({ error: 'The recovery key is only shown on the studio computer.' });
+  }
+  try {
+    writeSettings({ recoveryKeyShown: true });
+    res.json({ recoveryKey: getDataKey().toString('base64') });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/backup/recovery-key/confirm', (req, res) => {
+  if (!isLocalRequest(req)) {
+    return res.status(403).json({ error: 'Confirm the recovery key on the studio computer.' });
+  }
+  if (!readSettings().recoveryKeyShown) {
+    return res.status(400).json({ error: 'Show the recovery key first.' });
+  }
+  const typed = Buffer.from(String(req.body?.recoveryKey || ''));
+  const actual = Buffer.from(getDataKey().toString('base64'));
+  if (typed.length !== actual.length || !crypto.timingSafeEqual(typed, actual)) {
+    return res.status(400).json({ error: 'That is not the recovery key.' });
+  }
+  writeSettings({ recoveryKeyConfirmed: true });
+  res.json(backupPublicStatus());
+});
+
+app.post('/api/backup/move-leftovers', (req, res) => {
+  if (!isLocalRequest(req)) {
+    return res.status(403).json({ error: 'Move leftover files from the studio computer.' });
+  }
+  const settings = readSettings();
+  if (!settings.autoBackupDir) return res.status(400).json({ error: 'Choose a backup folder first' });
+  try {
+    const folder = validateBackupDir(settings.autoBackupDir, DATA_DIR);
+    const dest = path.join(folder, 'plaintext-leftovers');
+    fs.mkdirSync(dest, { recursive: true });
+    const moved = [];
+    for (const source of listPlaintextLeftovers()) {
+      const target = path.join(dest, path.basename(source));
+      fs.copyFileSync(source, target);
+      if (fs.statSync(target).size !== fs.statSync(source).size) {
+        throw new Error(`Could not copy ${path.basename(source)}`);
+      }
+      fs.unlinkSync(source);
+      moved.push(target);
+    }
+    res.json({ ok: true, moved, ...backupPublicStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not move leftover files' });
+  }
+});
+
+app.post('/api/backup/encrypt', async (req, res) => {
+  if (!isLocalRequest(req)) {
+    return res.status(403).json({ error: 'Encrypt the catalog from the studio computer.' });
+  }
+  const settings = readSettings();
+  if (!settings.autoBackupDir) return res.status(400).json({ error: 'Choose a backup folder first' });
+  const blockers = encryptionBlockers({ skipRecoveryZip: true });
+  if (blockers.length) return res.status(400).json({ error: blockers[0], blockers });
+  try {
+    await writeRecoveryCopy({
+      db,
+      destDir: settings.autoBackupDir,
+      dataDir: DATA_DIR,
+      uploadsDir: UPLOADS_DIR,
+      inboxDir: MANUAL_INBOX_DIR,
+      settings,
+      appVersion: getCurrentVersion(),
+      tables: BACKUP_TABLES
+    });
+    const written = encryptionBlockers({ verifyZip: true });
+    if (written.length) return res.status(400).json({ error: written[0], blockers: written });
+    if (isPlainSqlite(DB_PATH)) {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      db.pragma('journal_mode = DELETE');
+      db.pragma(`rekey='${getDataKey().toString('hex')}'`);
+      db.pragma('journal_mode = WAL');
+      db.prepare('SELECT count(*) AS n FROM sqlite_master').get();
+      if (isPlainSqlite(DB_PATH)) throw new Error('The catalog is still a plain database.');
+    }
+    commitCatalogEncryption();
+    res.json({ ok: true, ...backupPublicStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not encrypt the catalog' });
+  }
+});
+
+app.put('/api/backup/folder', (req, res) => {
+  try {
+    const dir = validateBackupDir(req.body?.dir, DATA_DIR);
+    const keep = Math.max(1, Math.min(30, parseInt(req.body?.keep, 10) || readSettings().autoBackupKeep || 7));
+    writeSettings({ autoBackupDir: dir, autoBackupKeep: keep, autoBackupLastError: '' });
+    res.json(backupPublicStatus());
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/backup/recovery-copy', async (req, res) => {
+  if (!isLocalRequest(req)) {
+    return res.status(403).json({ error: 'The recovery copy is only written from the studio computer.' });
+  }
+  const settings = readSettings();
+  if (!settings.autoBackupDir) {
+    return res.status(400).json({ error: 'Choose a backup folder first' });
+  }
+  try {
+    const result = await writeRecoveryCopy({
+      db,
+      destDir: settings.autoBackupDir,
+      dataDir: DATA_DIR,
+      uploadsDir: UPLOADS_DIR,
+      inboxDir: MANUAL_INBOX_DIR,
+      settings,
+      appVersion: getCurrentVersion(),
+      tables: BACKUP_TABLES
+    });
+    res.json({ ok: true, recoveryPath: result.path, ...backupPublicStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Could not write the recovery copy' });
+  }
+});
+
+app.post('/api/backup/folder/run', async (_req, res) => {
+  const settings = readSettings();
+  if (!settings.autoBackupDir) {
+    return res.status(400).json({ error: 'Choose a backup folder first' });
+  }
+  try {
+    const result = await writeFolderBackup({
+      db,
+      destDir: settings.autoBackupDir,
+      dataDir: DATA_DIR,
+      uploadsDir: UPLOADS_DIR,
+      inboxDir: MANUAL_INBOX_DIR,
+      settings,
+      appVersion: getCurrentVersion(),
+      tables: BACKUP_TABLES,
+      keep: settings.autoBackupKeep || 7
+    });
+    writeSettings({
+      autoBackupLastAt: new Date().toISOString(),
+      autoBackupLastPath: result.path,
+      autoBackupLastError: ''
+    });
+    res.json({ ok: true, ...backupPublicStatus(), kept: result.kept });
+  } catch (err) {
+    writeSettings({ autoBackupLastError: err.message || 'Backup failed' });
+    res.status(500).json({ error: err.message || 'Backup failed', ...backupPublicStatus() });
+  }
 });
 
 app.get('/api/export/json', (_req, res) => {
@@ -2278,7 +2594,7 @@ app.get('/api/export/sql', (_req, res) => {
 
 app.get('/api/export/csv', (req, res) => {
   const { where, values, orderBy } = buildSearchQuery(req.query);
-  const items = db.prepare(`SELECT * FROM items ${where} ORDER BY ${orderBy}`).all(values);
+  const items = db.prepare(`SELECT i.* FROM items i ${where} ORDER BY ${orderBy}`).all(values);
   const headers = ['id','name','common_name','category','instrument_type','instrument_specs_json','brand','model','serial_number','year',
     'purchase_date','purchase_price','replacement_value','replacement_value_note','condition',
     'condition_notes','location','description','quantity','requires_power','power_adapter_voltage',
@@ -2312,8 +2628,11 @@ function existingUploadRelativePath(value) {
 }
 
 app.post('/api/import/json', async (req, res) => {
-  const { items, software_licenses: softwareLicenses, replace = false } = req.body;
+  const { items, software_licenses: softwareLicenses, replace = false, confirmPhrase = '' } = req.body;
   if (!Array.isArray(items)) return res.status(400).json({ error: 'Invalid import data' });
+  if (replace && confirmPhrase !== 'replace the catalog') {
+    return res.status(400).json({ error: 'Type "replace the catalog" to replace the inventory. This deletes value history and the edit log.' });
+  }
   const hasSoftwareCatalog = Array.isArray(softwareLicenses);
 
   try {
@@ -2329,14 +2648,14 @@ app.post('/api/import/json', async (req, res) => {
         INSERT INTO items (id,name,common_name,category,instrument_type,instrument_specs_json,brand,model,serial_number,year,
           purchase_date,purchase_price,replacement_value,replacement_value_note,
           condition,condition_notes,location,description,quantity,update_checks_enabled,
-          warranty_end_date,warranty_note,studio_status,studio_status_note,value_updated_at,
+          warranty_end_date,warranty_note,studio_status,studio_status_note,disposition_date,value_updated_at,
           parent_item_id,depreciated_value,on_insurance_policy,insurance_policy_note,
           requires_power,power_adapter_voltage,power_adapter_current,power_adapter_polarity,power_adapter_notes,
           created_at,updated_at)
         VALUES (@id,@name,@common_name,@category,@instrument_type,@instrument_specs_json,@brand,@model,@serial_number,@year,
           @purchase_date,@purchase_price,@replacement_value,@replacement_value_note,
           @condition,@condition_notes,@location,@description,@quantity,@update_checks_enabled,
-          @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,@value_updated_at,
+          @warranty_end_date,@warranty_note,@studio_status,@studio_status_note,@disposition_date,@value_updated_at,
           NULL,@depreciated_value,@on_insurance_policy,@insurance_policy_note,
           @requires_power,@power_adapter_voltage,@power_adapter_current,@power_adapter_polarity,@power_adapter_notes,
           @created_at,@updated_at)
@@ -2380,6 +2699,9 @@ app.post('/api/import/json', async (req, res) => {
         if (sourceId) idMap.set(sourceId, newId);
         pending.push({ raw: raw || {}, newId, parentSourceId: validId(raw?.parent_item_id) });
         setItemTags(newId, (raw?.tags || []).map(t => typeof t === 'string' ? t : t?.name));
+        if (Number(data.replacement_value) > 0) {
+          recordReplacementValue(newId, data.replacement_value, data.replacement_value_note);
+        }
       }
 
       for (const row of pending) {
@@ -2484,8 +2806,7 @@ app.post('/api/import/json', async (req, res) => {
   }
 });
 
-app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => {
-  if (!req.file?.path) return res.status(400).json({ error: 'Choose a Studio Inventory backup ZIP' });
+async function restoreUploadedBackup(filePath) {
   const restoreId = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
   const stageRoot = path.join(DATA_DIR, `.restore-stage-${restoreId}`);
   const stageUploads = path.join(stageRoot, 'uploads');
@@ -2497,13 +2818,13 @@ app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => 
   let restoreSucceeded = false;
 
   try {
-    const zip = new AdmZip(req.file.path);
+    const zip = readBackupZip(filePath);
     const backupEntry = zip.getEntry('backup.json');
-    if (!backupEntry) return res.status(400).json({ error: 'Backup ZIP is missing backup.json' });
+    if (!backupEntry) throw new Error('Backup ZIP is missing backup.json');
 
     const backup = JSON.parse(backupEntry.getData().toString('utf8'));
     if (backup?.manifest?.format !== 'studio-inventory-full-backup' || !backup.tables) {
-      return res.status(400).json({ error: 'This is not a Studio Inventory full backup ZIP' });
+      throw new Error('This is not a Studio Inventory full backup ZIP');
     }
 
     fs.mkdirSync(stageUploads, { recursive: true });
@@ -2565,7 +2886,7 @@ app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => 
       console.warn('Backup restored, but manual search could not be rebuilt:', indexErr.message);
     }
     const itemCount = db.prepare('SELECT COUNT(*) as c FROM items').get().c;
-    res.json({
+    return {
       ok: true,
       tables: BACKUP_TABLES.length,
       rows: restoredRows,
@@ -2573,16 +2894,25 @@ app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => 
       items: itemCount,
       indexedManuals: manualIndex.indexed,
       manualsProcessed: manualIndex.processed
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message || 'Could not restore backup ZIP' });
+    };
   } finally {
-    try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch { /* cleanup on next run */ }
     try { if (fs.existsSync(stageRoot)) fs.rmSync(stageRoot, { recursive: true, force: true }); } catch { /* ignore */ }
     if (restoreSucceeded) {
       try { if (fs.existsSync(rollbackUploads)) fs.rmSync(rollbackUploads, { recursive: true, force: true }); } catch { /* ignore */ }
       try { if (fs.existsSync(rollbackInbox)) fs.rmSync(rollbackInbox, { recursive: true, force: true }); } catch { /* ignore */ }
     }
+  }
+}
+
+app.post('/api/import/full', backupUpload.single('backup'), async (req, res) => {
+  if (!req.file?.path) return res.status(400).json({ error: 'Choose a Studio Inventory backup ZIP' });
+  try {
+    res.json(await restoreUploadedBackup(req.file.path));
+  } catch (err) {
+    const status = /missing backup|not a Studio|unlock|Could not unlock|Encrypted backup/i.test(err.message) ? 400 : 500;
+    res.status(status).json({ error: err.message || 'Could not restore backup ZIP' });
+  } finally {
+    try { if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch { /* cleanup on next run */ }
   }
 });
 
@@ -2603,10 +2933,114 @@ app.get('/scan/:id', (req, res) => {
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
+const AUTO_BACKUP_MS = 24 * 60 * 60 * 1000;
+const OPEN_BACKUP_MS = 6 * 60 * 60 * 1000;
+let folderBackupRunning = false;
+let shuttingDown = false;
+
+function catalogNewerThan(lastMs) {
+  for (const suffix of ['', '-wal']) {
+    try {
+      if (fs.statSync(DB_PATH + suffix).mtimeMs > lastMs) return true;
+    } catch { /* no file yet */ }
+  }
+  return false;
+}
+
+function backupIsDue(settings) {
+  if (!settings.autoBackupDir) return false;
+  const last = Date.parse(settings.autoBackupLastAt || '');
+  if (!last) return true;
+  if (Date.now() - last > AUTO_BACKUP_MS) return true;
+  return catalogNewerThan(last);
+}
+
+async function runSavedFolderBackup(reason) {
+  if (folderBackupRunning) return null;
+  const settings = readSettings();
+  if (!settings.autoBackupDir) return null;
+  folderBackupRunning = true;
+  try {
+    const result = await writeFolderBackup({
+      db,
+      destDir: settings.autoBackupDir,
+      dataDir: DATA_DIR,
+      uploadsDir: UPLOADS_DIR,
+      inboxDir: MANUAL_INBOX_DIR,
+      settings,
+      appVersion: getCurrentVersion(),
+      tables: BACKUP_TABLES,
+      keep: settings.autoBackupKeep || 7
+    });
+    writeSettings({
+      autoBackupLastAt: new Date().toISOString(),
+      autoBackupLastPath: result.path,
+      autoBackupLastError: ''
+    });
+    console.log(`  Folder backup (${reason}): ${result.path}`);
+    return result;
+  } catch (err) {
+    writeSettings({ autoBackupLastError: err.message || 'Backup failed' });
+    console.error(`  Folder backup failed (${reason}): ${err.message}`);
+    return null;
+  } finally {
+    folderBackupRunning = false;
+  }
+}
+
+function startFolderBackupSchedule() {
+  if (process.env.STUDIO_SKIP_AUTO_BACKUP === '1') return;
+  setTimeout(() => {
+    if (backupIsDue(readSettings())) runSavedFolderBackup('startup');
+  }, 4000);
+  const timer = setInterval(() => {
+    if (readSettings().autoBackupDir) runSavedFolderBackup('interval');
+  }, OPEN_BACKUP_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
+function installFolderBackupShutdown() {
+  const stop = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      if (process.env.STUDIO_SKIP_AUTO_BACKUP !== '1') {
+        const settings = readSettings();
+        const last = Date.parse(settings.autoBackupLastAt || '');
+        if (settings.autoBackupDir && (!last || Date.now() - last > 15 * 60 * 1000)) {
+          await runSavedFolderBackup('shutdown');
+        }
+      }
+    } catch (err) {
+      console.error('Shutdown backup failed:', err.message);
+    }
+    process.exit(0);
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+}
+
+installFolderBackupShutdown();
+
+async function restorePendingMove() {
+  const pending = path.join(DATA_DIR, 'pending-move-restore.zip');
+  if (!fs.existsSync(pending)) return;
+  try {
+    const result = await restoreUploadedBackup(pending);
+    fs.unlinkSync(pending);
+    console.log(`  Restored ${result.items} items from the recovery ZIP.`);
+  } catch (err) {
+    console.error('  Could not restore the recovery ZIP:', err.message);
+    console.error('  The ZIP is still at', pending);
+  }
+}
+
+restorePendingMove().then(() => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  Studio Inventory v${getCurrentVersion()} running at http://localhost:${PORT}`);
   console.log(`  Database: ${DB_PATH}`);
   console.log(`  Uploads:  ${UPLOADS_DIR}\n`);
+  startFolderBackupSchedule();
 
   checkForUpdate().then((info) => {
     if (info.updateAvailable) {
@@ -2616,4 +3050,5 @@ app.listen(PORT, '0.0.0.0', () => {
       console.log(`  Update check skipped (${info.error})\n`);
     }
   }).catch(() => {});
+});
 });

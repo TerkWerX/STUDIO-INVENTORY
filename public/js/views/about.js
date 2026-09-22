@@ -3,7 +3,7 @@ import { escapeHtml } from '../utils.js';
 export function renderAbout() {
   return `
     <h2 class="page-title">Help &amp; About</h2>
-    <p class="page-subtitle">Studio Inventory v2.5.8 — Local music gear management</p>
+    <p class="page-subtitle">Studio Inventory <span id="about-app-version"></span> — Local music gear management</p>
 
     <div class="card">
       <h3 class="section-title">Getting Started</h3>
@@ -30,7 +30,7 @@ export function renderAbout() {
         <li><strong>Studio View</strong> — Full-screen room map and wall elevations; tap gear for item info or manuals.</li>
         <li><strong>Studio Setup</strong> — Draw rooms, floor textures, wall photos, racks, and signal chains.</li>
         <li><strong>Guest link</strong> — Read-only LAN sharing for bandmates (Backup page).</li>
-        <li><strong>Depreciation &amp; insurance flags</strong> — Track depreciated value and policy-listed items.</li>
+        <li><strong>Value history</strong> — Each replacement-value change keeps a date and a note. Policy-listed items are flagged separately.</li>
         <li><strong>Accessories</strong> — Link cases, cables, and spare parts to parent gear.</li>
         <li><strong>PDF manual search</strong> — Full-text search inside uploaded PDF manuals.</li>
         <li><strong>Loan tracking</strong> — Check gear out to bandmates, set due dates, mark returned, full history.</li>
@@ -89,14 +89,32 @@ export function renderAbout() {
     <div class="card">
       <h3 class="section-title">Updates</h3>
       <p style="color:var(--text-secondary);line-height:1.8">
-        Studio Inventory checks <a href="https://github.com/TerkWerX/STUDIO-INVENTORY/releases" target="_blank" rel="noopener" style="color:var(--accent)">GitHub Releases</a> at startup.
-        When a newer version is available, a banner appears at the top of the app with a download link.
+        Studio Inventory checks the <a href="https://www.terkwerx.com/project-studio-inventory.html#download" target="_blank" rel="noopener" style="color:var(--accent)">TerkWerX website</a> at startup.
+        When a newer version is available, the app offers the download for the studio computer running the server.
       </p>
+      <div class="btn-group" style="margin-top:0.75rem">
+        <button type="button" class="btn btn-primary" id="app-check-updates">Check for Updates</button>
+        <button type="button" class="btn btn-secondary hidden" id="app-download-update">Get Update</button>
+      </div>
+      <p id="app-update-status" role="status" aria-live="polite" style="margin-top:0.75rem;color:var(--text-secondary)">Check for the latest version from TerkWerX.</p>
+      <p id="app-update-notes" style="white-space:pre-line;color:var(--text-secondary)"></p>
       <p style="color:var(--text-secondary);line-height:1.8;margin-top:0.75rem">
-        <strong>Your inventory is safe when updating.</strong> Gear, photos, manuals, receipts, and warranty data live in the <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">data/</code> folder.
+        Make a <strong>Full Backup ZIP</strong> in Backup &amp; Restore before updating, then stop the running Studio Inventory server. Closing the browser alone does not stop it.
+        Gear, photos, manuals, receipts, and warranty data live in your catalog folder.
         Re-run <strong>Install Studio Inventory</strong> from the new download — your <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">data/</code> folder is preserved automatically.
         Developers using git: <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">git pull && npm install</code> — <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">data/</code> is never touched.
       </p>
+      <details style="margin-top:0.75rem">
+        <summary>Stopping the server and updating portable copies</summary>
+        <p style="color:var(--text-secondary);line-height:1.8;margin-top:0.75rem">
+          If you started the app in a terminal, press Ctrl+C there. On Windows, if you used the app launcher,
+          use Task Manager to end only the Node process whose executable path points inside your Studio Inventory folder.
+          For a portable copy, extract the new portable package into a new folder and copy your complete <code>data/</code>
+          folder into it while both copies are stopped. Keep the old folder until you have verified the new copy.
+          If you configured a custom catalog location, keep that same configuration when starting the new version.
+          Updates on a phone or tablet must be installed on the studio computer running the server.
+        </p>
+      </details>
     </div>
 
     <div class="card">
@@ -112,7 +130,7 @@ export function renderAbout() {
   `;
 }
 
-export function renderBackup(guest = {}, ownerAuth = {}) {
+export function renderBackup(guest = {}, ownerAuth = {}, folderBackup = {}) {
   const guestOn = !!guest.guestEnabled;
   const guestUrl = guest.guestUrl || '';
   const pinSet = !!ownerAuth.ownerPinSet;
@@ -157,6 +175,57 @@ export function renderBackup(guest = {}, ownerAuth = {}) {
         Your inventory data is stored locally. Regular backups are essential for insurance documentation.
         Export your data at least once a month.
       </p>
+    </div>
+
+    <div class="card">
+      <h3 class="section-title">Backup Folder</h3>
+      <p style="color:var(--text-secondary);margin-bottom:1rem">
+        Keep three copies, on two kinds of media, with one always offsite. The catalog on this PC is the first copy. A quality USB thumb drive, left plugged in for this job, is the second copy and the second kind of media. Cloud storage you control, or a drive you keep somewhere else, is the offsite copy. The app does not upload it.
+        Point this folder at the USB drive, not at another partition of the catalog drive. After you set it, the app writes an encrypted copy when you open it and again every few hours while it stays open. Closing the window does not save one.
+        Those encrypted copies work on this Windows account. On a new computer they open only with the recovery key.
+        The recovery ZIP on the USB drive is a normal ZIP: license keys, photos, and the guest token. Treat that file like the catalog itself. It opens on a new computer without the key. Refresh replaces it only after the new file is complete, and keeps the last one as <code>studio-inventory-recovery-previous.zip</code>. Copy that ZIP, and the recovery key, to the offsite place too.
+        To move machines, install Studio Inventory on the new computer. If you copied this computer's <code>data</code> folder, the new computer will ask for the recovery key or for <code>studio-inventory-recovery.zip</code>. If you did not copy <code>data</code>, use Restore on the recovery ZIP. Either one is enough.
+      </p>
+      <div class="form-group">
+        <label for="backup-folder-path">Folder path</label>
+        <input type="text" id="backup-folder-path" value="${escapeHtml(folderBackup.dir || '')}" placeholder="E:\\Studio Inventory Backups" spellcheck="false">
+      </div>
+      <div class="btn-group">
+        <button type="button" class="btn btn-secondary" id="backup-folder-save">Save Folder</button>
+        <button type="button" class="btn btn-primary" id="backup-folder-run">Back Up to Folder Now</button>
+        <button type="button" class="btn btn-secondary" id="backup-recovery-copy">Refresh Recovery Copy</button>
+      </div>
+      <p id="backup-folder-status" class="text-muted-sm" style="margin-top:0.75rem">
+        ${folderBackup.lastAt
+          ? `Last folder backup: ${escapeHtml(folderBackup.lastAt)}`
+          : 'No folder backup recorded yet.'}
+        ${folderBackup.lastError ? `<br>Last error: ${escapeHtml(folderBackup.lastError)}` : ''}
+        <br>${folderBackup.recoveryReady ? 'Recovery ZIP is in the backup folder.' : 'No recovery ZIP yet. Refresh it before you rely on the encrypted copies.'}
+        ${folderBackup.recoveryPreviousReady ? '<br>Previous recovery ZIP is still there.' : ''}
+      </p>
+      ${folderBackup.diskWarning ? `<p class="text-muted-sm">${escapeHtml(folderBackup.diskWarning)}</p>` : ''}
+      <p class="text-muted-sm">
+        The recovery ZIP and the encrypted copies both contain the guest-link token and the QR signing secret. Restoring an encrypted copy on a new computer needs the recovery key.
+      </p>
+      <div class="btn-group">
+        <button type="button" class="btn btn-ghost btn-sm" id="backup-recovery-show">Show Recovery Key</button>
+      </div>
+      <input type="text" id="backup-recovery-key" class="guest-url-input" readonly hidden spellcheck="false" style="margin-top:0.75rem">
+      <div class="form-group" style="margin-top:0.75rem">
+        <label for="backup-recovery-type">Type the recovery key after you write it down</label>
+        <input type="text" id="backup-recovery-type" spellcheck="false" autocomplete="off">
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" id="backup-recovery-confirm">Confirm recovery key</button>
+      ${(folderBackup.leftovers || []).length ? `
+        <p class="text-muted-sm">Plaintext leftovers still in data/: ${folderBackup.leftovers.map(name => escapeHtml(name)).join(', ')}</p>
+        <button type="button" class="btn btn-secondary btn-sm" id="backup-move-leftovers">Move leftover files to the backup folder</button>
+      ` : ''}
+      <p class="text-muted-sm" id="backup-encrypt-blockers">
+        ${folderBackup.encryptionArmed
+          ? 'The catalog database is encrypted for this Windows account.'
+          : (folderBackup.encryptionBlockers || []).map(line => escapeHtml(line)).join('<br>') || 'The catalog can be encrypted.'}
+      </p>
+      ${folderBackup.encryptionArmed ? '' : '<button type="button" class="btn btn-primary" id="backup-encrypt">Encrypt the catalog</button>'}
     </div>
 
     <div class="card">

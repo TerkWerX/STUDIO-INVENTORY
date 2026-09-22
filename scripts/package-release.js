@@ -435,7 +435,7 @@ if (platform === 'win') {
   );
   writeFile(
     'README-INSTALL.txt',
-    `Studio Inventory — Windows\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Studio Inventory.exe"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall shortcuts (optional):\r\n  Double-click "Install Studio Inventory.exe"\r\n  Creates Start Menu + Desktop shortcuts in %LOCALAPPDATA%\\Studio Inventory\r\n\r\nFallback scripts are included if Windows blocks the launcher:\r\n  Start Studio Inventory.bat\r\n  Install Studio Inventory.bat\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release ZIP\r\n  2. Extract it anywhere temporary\r\n  3. Run "Install Studio Inventory.exe" from the new package\r\n  Your data\\ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks GitHub at startup for updates.\r\n`
+    `Studio Inventory — Windows\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Studio Inventory.exe"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall shortcuts (optional):\r\n  Double-click "Install Studio Inventory.exe"\r\n  Creates Start Menu + Desktop shortcuts in %LOCALAPPDATA%\\Studio Inventory\r\n\r\nFallback scripts are included if Windows blocks the launcher:\r\n  Start Studio Inventory.bat\r\n  Install Studio Inventory.bat\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release ZIP\r\n  2. Extract it anywhere temporary\r\n  3. Run "Install Studio Inventory.exe" from the new package\r\n  Your data\\ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks the TerkWerX website at startup for updates. Use Help & About to check manually and get update instructions.\r\n`
   );
 } else if (platform === 'mac') {
   writeFile(
@@ -451,7 +451,7 @@ if (platform === 'win') {
   fs.chmodSync(path.join(outRoot, 'start-studio-inventory.sh'), 0o755);
   writeFile(
     'README-INSTALL.txt',
-    `Studio Inventory — macOS\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Start Studio Inventory.command"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall to Applications (optional):\r\n  Double-click "Install Studio Inventory.command"\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release DMG or ZIP\r\n  2. Run "Install Studio Inventory.command" from the new package\r\n  Your data/ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks GitHub at startup for updates.\r\n\r\nFirst time: if macOS blocks the script, right-click → Open.\r\nFull guide: MAC.md or https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/MAC.md\r\n`
+    `Studio Inventory — macOS\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Start Studio Inventory.command"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall to Applications (optional):\r\n  Double-click "Install Studio Inventory.command"\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release DMG or ZIP\r\n  2. Run "Install Studio Inventory.command" from the new package\r\n  Your data/ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks the TerkWerX website at startup for updates. Use Help & About to check manually and get update instructions.\r\n\r\nFirst time: if macOS blocks the script, right-click → Open.\r\nFull guide: MAC.md or https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/MAC.md\r\n`
   );
 } else {
   writeFile(
@@ -495,7 +495,7 @@ Updating preserves your gear, photos, manuals, wall photos, and receipts:
   1. Download and extract the newer release
   2. Run ./Install\\ Studio\\ Inventory.sh from the new package
 
-The app includes its own Node runtime and checks GitHub at startup for updates.
+The app includes its own Node runtime and checks the TerkWerX website at startup for updates. Use Help & About to check manually and get update instructions.
 Full guide: LINUX.md or https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/LINUX.md
 `
   );

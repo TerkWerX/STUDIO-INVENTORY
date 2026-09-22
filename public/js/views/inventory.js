@@ -75,6 +75,10 @@ export function renderInventory(items, meta, filters) {
             <input type="checkbox" id="filter-show-accessories" ${f.show_accessories ? 'checked' : ''}>
             <span>Show accessories</span>
           </label>
+          <label class="toggle-label">
+            <input type="checkbox" id="filter-show-former" ${f.show_former ? 'checked' : ''}>
+            <span>Show former gear</span>
+          </label>
         </div>
         <button type="button" class="btn btn-secondary" id="clear-filters">Clear</button>
       </div>
@@ -155,9 +159,42 @@ export function renderItemDetail(item, meta = {}) {
         <button type="button" class="btn btn-ghost" data-action="print-label" data-id="${item.id}">Print Owner Label</button>
         <button type="button" class="btn btn-accent" data-action="auto-estimate" data-brand="${escapeHtml(item.brand)}" data-model="${escapeHtml(item.model)}" data-name="${escapeHtml(item.name)}">Auto-Estimate Value</button>
         <button type="button" class="btn btn-primary" data-action="edit-item" data-id="${item.id}">Edit</button>
-        <button type="button" class="btn btn-danger" data-action="delete-item" data-id="${item.id}">Delete</button>
+        <button type="button" class="btn btn-danger" data-action="former-item" data-id="${item.id}">No longer owned</button>
       </div>
     </div>
+
+    <div class="card hidden" id="former-panel">
+      <h3 class="section-title">No longer owned</h3>
+      <p class="text-muted-sm">The record, photos, and receipts stay. The insured total no longer includes this item. Nested parts with no note of their own follow it.</p>
+      <div class="form-group">
+        <label for="former-status">What happened</label>
+        <select id="former-status">
+          <option value="sold">Sold</option>
+          <option value="stolen">Stolen</option>
+          <option value="destroyed">Destroyed</option>
+          <option value="given_away">Given away</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="former-date">Date</label>
+        <input type="date" id="former-date">
+      </div>
+      <div class="form-group">
+        <label for="former-note">Note</label>
+        <input type="text" id="former-note" maxlength="500" placeholder="Required. Who bought it, or what happened.">
+      </div>
+      <button type="button" class="btn btn-danger" id="former-save">Keep the record</button>
+    </div>
+
+    <details class="card">
+      <summary>Erase a duplicate</summary>
+      <p class="text-muted-sm">This destroys the photos, receipts, value history, and edit log. Use it only for an item entered by mistake, not for gear you sold or that was stolen.</p>
+      <div class="form-group">
+        <label for="erase-name">Type the item name</label>
+        <input type="text" id="erase-name" autocomplete="off" spellcheck="false">
+      </div>
+      <button type="button" class="btn btn-danger btn-sm" id="erase-item">Erase this record</button>
+    </details>
 
     <div class="card map-placement-card">
       <div class="card-header">
@@ -286,10 +323,36 @@ export function renderItemDetail(item, meta = {}) {
           <span class="value-trio-amount">${formatCurrency(item.replacement_value)}</span>
         </div>
         <div class="value-trio-item">
-          <span class="value-trio-label">Depreciated</span>
-          <span class="value-trio-amount">${formatCurrency(item.depreciated_value || 0)}</span>
+          <span class="value-trio-label">As of</span>
+          <span class="value-trio-amount">${formatDate((item.value_events?.[0]?.recorded_at || item.value_updated_at || '').slice(0, 10))}</span>
         </div>
       </div>
+      ${(item.value_events || []).length ? `
+        <div class="value-history">
+          <div class="field-label">Replacement history</div>
+          <ul class="accessory-list">
+            ${item.value_events.map(event => `
+              <li class="accessory-list-item">
+                <strong>${formatCurrency(event.amount)}</strong>
+                <span class="text-muted-sm">${formatDate((event.recorded_at || '').slice(0, 10))}${event.note ? ` · ${escapeHtml(event.note)}` : ''}</span>
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+      ` : ''}
+      ${(item.audit || []).length ? `
+        <div class="value-history">
+          <div class="field-label">Record changes</div>
+          <ul class="accessory-list">
+            ${item.audit.slice(0, 12).map(entry => `
+              <li class="accessory-list-item">
+                <strong>${escapeHtml(entry.field.replaceAll('_', ' '))}</strong>
+                <span class="text-muted-sm">${escapeHtml(entry.old_value || '—')} → ${escapeHtml(entry.new_value || '—')} · ${formatDate((entry.recorded_at || '').slice(0, 10))}</span>
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+      ` : ''}
       <div class="detail-grid value-meta-grid">
         <div class="detail-field"><div class="field-label">Purchase Date</div><div class="field-value">${formatDate(item.purchase_date)}</div></div>
         <div class="detail-field"><div class="field-label">Insurance Policy</div><div class="field-value">${item.on_insurance_policy ? 'Listed' : 'Not listed'}</div></div>
@@ -380,11 +443,11 @@ export function renderItemDetail(item, meta = {}) {
       <div class="card-header">
         <h3 class="section-title">Manuals &amp; Documents</h3>
         <div class="btn-group">
-          <button type="button" class="btn btn-ghost" data-action="manual-web-search">Find Online</button>
+          <button type="button" class="btn btn-ghost" data-action="manual-web-search">Find documents</button>
           <button type="button" class="btn btn-secondary" data-action="manual-inbox-import">Import from Inbox</button>
           <button type="button" class="btn btn-secondary" data-action="archive-manual-url">Save from URL</button>
           <label class="btn btn-secondary" style="cursor:pointer">
-            Upload Document<input type="file" accept=".pdf,application/pdf,.doc,.docx,.txt" data-action="upload-manual" data-id="${item.id}" hidden>
+            Upload Documents<input type="file" accept=".pdf,application/pdf,.doc,.docx,.txt,image/*" multiple data-action="upload-manual" data-id="${item.id}" hidden>
           </label>
         </div>
       </div>
@@ -405,7 +468,7 @@ export function renderItemDetail(item, meta = {}) {
             </div>
           `).join('')}
         </div>
-      ` : '<p class="text-muted">No manuals attached.</p>'}
+      ` : '<p class="text-muted">No documents yet. You can attach more than one: a manual, a spec sheet, a schematic, a warranty, or anything else that belongs with this gear.</p>'}
     </div>
 
     ${showDriverSection ? `

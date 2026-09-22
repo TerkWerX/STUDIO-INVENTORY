@@ -1,4 +1,5 @@
 import { formatCurrency, formatDate, escapeHtml, fileUrl } from '../utils.js';
+import { isFormerStatus, STUDIO_STATUS_LABELS } from '../lib/completeness-ui.js';
 
 export function renderReports(items, stats) {
   const { totals } = stats;
@@ -86,8 +87,48 @@ export function renderReports(items, stats) {
   `;
 }
 
+function insuranceItemBlock(item, { former = false } = {}) {
+  const photo = (item.attachments || []).find(a => a.type === 'photo' || a.mime_type?.startsWith('image/'));
+  const status = STUDIO_STATUS_LABELS[item.studio_status] || item.studio_status;
+  return `
+    <div class="insurance-item">
+      ${photo
+        ? `<img class="insurance-photo" src="${fileUrl(photo.relative_path)}" alt="${escapeHtml(item.name)}">`
+        : `<div class="insurance-photo-placeholder">No Photo</div>`
+      }
+      <div>
+        <h4 style="font-size:var(--font-lg);margin-bottom:0.5rem">${escapeHtml(item.name)}</h4>
+        <p style="color:var(--text-secondary);margin-bottom:0.5rem">${escapeHtml(item.brand)} ${escapeHtml(item.model)} — ${escapeHtml(item.category)}</p>
+        <p><strong>Serial:</strong> ${escapeHtml(item.serial_number) || 'N/A'} &nbsp;|&nbsp;
+           <strong>Year:</strong> ${escapeHtml(item.year) || 'N/A'} &nbsp;|&nbsp;
+           <strong>Qty:</strong> ${item.quantity}</p>
+        <p><strong>Location:</strong> ${escapeHtml(item.location)} &nbsp;|&nbsp;
+           <strong>Condition:</strong> ${item.condition}${former ? ` &nbsp;|&nbsp; <strong>${escapeHtml(status)}</strong> ${escapeHtml(item.disposition_date || '')}` : ''}</p>
+        <p><strong>Purchase:</strong> ${formatDate(item.purchase_date)} — ${formatCurrency(item.purchase_price)}</p>
+        <p><strong>Receipt on file:</strong> ${(item.receipts || []).length ? 'Yes' : 'No'}</p>
+        ${!former && (item.latest_value_event || item.value_updated_at) ? `<p><strong>Replacement as of:</strong> ${
+          (item.latest_value_event || item.value_events?.[0])?.note === 'Opening snapshot'
+            ? `Opening snapshot, not an appraisal (${formatDate(String((item.latest_value_event || item.value_events?.[0])?.recorded_at || item.value_updated_at).slice(0, 10))})`
+            : formatDate(String((item.latest_value_event || item.value_events?.[0])?.recorded_at || item.value_updated_at).slice(0, 10))
+        }</p>` : ''}
+        ${former && item.studio_status_note ? `<p style="font-size:var(--font-sm);color:var(--text-muted)">${escapeHtml(item.studio_status_note)}</p>` : ''}
+        ${item.replacement_value_note ? `<p style="font-size:var(--font-sm);color:var(--text-muted)">Value note: ${escapeHtml(item.replacement_value_note)}</p>` : ''}
+        ${item.description ? `<p style="margin-top:0.5rem;font-size:var(--font-sm)">${escapeHtml(item.description)}</p>` : ''}
+      </div>
+      <div class="value-cell" style="font-size:var(--font-xl);text-align:right">
+        ${former ? 'Not insured' : formatCurrency(item.replacement_value * item.quantity)}
+      </div>
+    </div>
+  `;
+}
+
 export function renderInsurance(items) {
-  const total = items.reduce((s, i) => s + (i.replacement_value || 0) * (i.quantity || 1), 0);
+  const owned = items.filter(item => !isFormerStatus(item.studio_status));
+  const former = items.filter(item => isFormerStatus(item.studio_status));
+  const lineValue = (item) => (item.replacement_value || 0) * (item.quantity || 1);
+  const total = owned.reduce((s, i) => s + lineValue(i), 0);
+  const nested = owned.filter(item => item.parent_item_id && lineValue(item) > 0);
+  const topLevel = owned.filter(item => !item.parent_item_id).reduce((s, i) => s + lineValue(i), 0);
   const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
   return `
@@ -102,13 +143,19 @@ export function renderInsurance(items) {
     <div class="report-totals">
       <div class="report-total-item">
         <div class="label">Total Insured Items</div>
-        <div class="value">${items.length}</div>
+        <div class="value">${owned.length}</div>
       </div>
       <div class="report-total-item">
         <div class="label">Total Replacement Value</div>
         <div class="value">${formatCurrency(total)}</div>
       </div>
     </div>
+    ${nested.length ? `
+      <p class="text-muted-sm" style="margin-top:-1rem;margin-bottom:1.5rem">
+        Includes ${nested.length} nested part${nested.length === 1 ? '' : 's'} with their own replacement value.
+        Top-level items alone are ${formatCurrency(topLevel)}.
+      </p>
+    ` : ''}
 
     <div class="card" id="insurance-report">
       <div style="text-align:center;margin-bottom:2rem;padding-bottom:1rem;border-bottom:2px solid var(--border)">
@@ -116,32 +163,12 @@ export function renderInsurance(items) {
         <p style="color:var(--text-secondary)">Insurance Documentation Report — ${date}</p>
       </div>
 
-      ${items.map(item => {
-        const photo = (item.attachments || []).find(a => a.type === 'photo' || a.mime_type?.startsWith('image/'));
-        return `
-          <div class="insurance-item">
-            ${photo
-              ? `<img class="insurance-photo" src="${fileUrl(photo.relative_path)}" alt="${escapeHtml(item.name)}">`
-              : `<div class="insurance-photo-placeholder">No Photo</div>`
-            }
-            <div>
-              <h4 style="font-size:var(--font-lg);margin-bottom:0.5rem">${escapeHtml(item.name)}</h4>
-              <p style="color:var(--text-secondary);margin-bottom:0.5rem">${escapeHtml(item.brand)} ${escapeHtml(item.model)} — ${escapeHtml(item.category)}</p>
-              <p><strong>Serial:</strong> ${escapeHtml(item.serial_number) || 'N/A'} &nbsp;|&nbsp;
-                 <strong>Year:</strong> ${escapeHtml(item.year) || 'N/A'} &nbsp;|&nbsp;
-                 <strong>Qty:</strong> ${item.quantity}</p>
-              <p><strong>Location:</strong> ${escapeHtml(item.location)} &nbsp;|&nbsp;
-                 <strong>Condition:</strong> ${item.condition}</p>
-              <p><strong>Purchase:</strong> ${formatDate(item.purchase_date)} — ${formatCurrency(item.purchase_price)}</p>
-              ${item.replacement_value_note ? `<p style="font-size:var(--font-sm);color:var(--text-muted)">Value note: ${escapeHtml(item.replacement_value_note)}</p>` : ''}
-              ${item.description ? `<p style="margin-top:0.5rem;font-size:var(--font-sm)">${escapeHtml(item.description)}</p>` : ''}
-            </div>
-            <div class="value-cell" style="font-size:var(--font-xl);text-align:right">
-              ${formatCurrency(item.replacement_value * item.quantity)}
-            </div>
-          </div>
-        `;
-      }).join('')}
+      ${owned.map(item => insuranceItemBlock(item)).join('')}
+      ${former.length ? `
+        <h3 style="margin-top:2rem">No longer owned</h3>
+        <p style="color:var(--text-secondary);margin-bottom:1rem">These records stay in the catalog. They are not part of the replacement total.</p>
+        ${former.map(item => insuranceItemBlock(item, { former: true })).join('')}
+      ` : ''}
 
       <div style="text-align:right;padding-top:1.5rem;margin-top:1rem;border-top:2px solid var(--border);font-size:var(--font-xl);font-weight:700">
         Total Replacement Value: ${formatCurrency(total)}
@@ -162,7 +189,7 @@ function sumValue(items) {
   return items.reduce((s, i) => s + (i.replacement_value || 0) * (i.quantity || 1), 0);
 }
 
-export function generatePdf(title, headers, rows, totals) {
+export function generatePdf(title, headers, rows, totals, extra) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: rows.length > 20 ? 'landscape' : 'portrait' });
   const date = new Date().toLocaleDateString();
@@ -182,6 +209,21 @@ export function generatePdf(title, headers, rows, totals) {
     headStyles: { fillColor: [26, 35, 50] },
     alternateRowStyles: { fillColor: [245, 247, 250] }
   });
+
+  if (extra?.headers) {
+    const sectionY = (doc.lastAutoTable?.finalY || 42) + 10;
+    doc.setFontSize(12);
+    doc.setTextColor(0);
+    doc.text(extra.title || 'No longer owned', 14, sectionY);
+    doc.autoTable({
+      startY: sectionY + 4,
+      head: [extra.headers],
+      body: extra.rows,
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: [26, 35, 50] },
+      alternateRowStyles: { fillColor: [245, 247, 250] }
+    });
+  }
 
   if (totals) {
     const finalY = doc.lastAutoTable.finalY + 10;

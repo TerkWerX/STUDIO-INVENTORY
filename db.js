@@ -1,6 +1,6 @@
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { openInventoryDatabase } = require('./lib/open-database');
 const { computeItemCompleteness } = require('./lib/completeness');
 const {
   profileById,
@@ -25,9 +25,14 @@ for (const dir of [DATA_DIR, UPLOADS_DIR, path.join(UPLOADS_DIR, 'photos'),
 
 const LOGOS_DIR = path.join(UPLOADS_DIR, 'logos');
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+let db = null;
+let catalogLock = null;
+try {
+  db = openInventoryDatabase(DB_PATH);
+} catch (err) {
+  if (err.code !== 'CATALOG_LOCKED') throw err;
+  catalogLock = err.message;
+}
 
 const DEFAULT_CATEGORIES = [
   'Guitar', 'Bass', 'Keyboard', 'Brass Instrument', 'Bowed String Instrument',
@@ -68,6 +73,39 @@ function runMigrations() {
   if (!itemCols.includes('studio_status_note')) {
     db.exec("ALTER TABLE items ADD COLUMN studio_status_note TEXT DEFAULT ''");
   }
+  if (!itemCols.includes('disposition_date')) {
+    db.exec("ALTER TABLE items ADD COLUMN disposition_date TEXT DEFAULT ''");
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS item_value_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      note TEXT DEFAULT '',
+      recorded_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_value_events_item ON item_value_events(item_id, recorded_at);
+    CREATE TABLE IF NOT EXISTS item_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      field TEXT NOT NULL,
+      old_value TEXT DEFAULT '',
+      new_value TEXT DEFAULT '',
+      recorded_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_item_audit_item ON item_audit(item_id, recorded_at);
+    CREATE TABLE IF NOT EXISTS studio_secrets (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      guest_token TEXT DEFAULT '',
+      scan_link_secret TEXT DEFAULT '',
+      owner_pin_hash TEXT DEFAULT '',
+      owner_pin_salt TEXT DEFAULT '',
+      owner_session_token TEXT DEFAULT '',
+      owner_session_tokens TEXT DEFAULT '[]'
+    );
+  `);
   if (!itemCols.includes('value_updated_at')) {
     db.exec('ALTER TABLE items ADD COLUMN value_updated_at TEXT DEFAULT NULL');
     db.exec(`UPDATE items SET value_updated_at = updated_at WHERE replacement_value > 0 AND value_updated_at IS NULL`);
@@ -387,6 +425,29 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_brands_name ON brands(name);
   `);
   runMigrations();
+  backfillOpeningValues();
+}
+
+function backfillOpeningValues() {
+  const rows = db.prepare(`
+    SELECT id, replacement_value, value_updated_at
+    FROM items
+    WHERE replacement_value > 0
+      AND NOT EXISTS (SELECT 1 FROM item_value_events e WHERE e.item_id = items.id)
+  `).all();
+  if (!rows.length) return 0;
+  const insert = db.prepare(`
+    INSERT INTO item_value_events (item_id, amount, note, recorded_at)
+    VALUES (?, ?, 'Opening snapshot', ?)
+  `);
+  const now = new Date().toISOString();
+  db.transaction((list) => {
+    for (const row of list) {
+      const text = String(row.value_updated_at || '').trim();
+      insert.run(row.id, row.replacement_value, /^\d{4}-\d{2}-\d{2}/.test(text) ? text : now);
+    }
+  })(rows);
+  return rows.length;
 }
 
 function ensureBrand(brandName) {
@@ -517,6 +578,10 @@ function enrichItem(item) {
     maintenance: getMaintenanceForItem(item.id),
     loans: getLoansForItem(item.id),
     activeLoan: enrichLoanRow(getActiveLoanForItem(item.id)),
+    latest_value_event: db.prepare(`
+      SELECT amount, note, recorded_at FROM item_value_events
+      WHERE item_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1
+    `).get(item.id) || null,
     parent: getParentSummary(item.parent_item_id),
     accessories: getAccessoryItems(item.id).map(child => {
       const att = getAttachmentsForItem(child.id);
@@ -557,6 +622,109 @@ function setItemTags(itemId, tagNames) {
   }
 }
 
+const FORMER_STATUSES = ['sold', 'stolen', 'destroyed', 'given_away'];
+const ACTIVE_STATUSES = ['in_studio', 'loaned', 'in_repair', 'storage', 'away'];
+
+function isFormerStatus(status) {
+  return FORMER_STATUSES.includes(status);
+}
+
+function ownedStatusSql(column = 'studio_status') {
+  return `${column} NOT IN ('sold','stolen','destroyed','given_away')`;
+}
+
+const AUDIT_FIELDS = ['serial_number', 'purchase_price', 'replacement_value', 'quantity', 'studio_status'];
+
+function valuesDiffer(field, before, after) {
+  if (['purchase_price', 'replacement_value', 'quantity'].includes(field)) {
+    return Number(before || 0) !== Number(after || 0);
+  }
+  return String(before ?? '') !== String(after ?? '');
+}
+
+function recordAuditChange(itemId, field, oldValue, newValue) {
+  db.prepare(`
+    INSERT INTO item_audit (item_id, field, old_value, new_value, recorded_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(itemId, field, String(oldValue ?? ''), String(newValue ?? ''), new Date().toISOString());
+}
+
+function recordItemChanges(itemId, before, after) {
+  if (!before || !after) return;
+  for (const field of AUDIT_FIELDS) {
+    if (valuesDiffer(field, before[field], after[field])) {
+      recordAuditChange(itemId, field, before[field], after[field]);
+    }
+  }
+}
+
+function recordReplacementValue(itemId, amount, note) {
+  db.prepare(`
+    INSERT INTO item_value_events (item_id, amount, note, recorded_at)
+    VALUES (?, ?, ?, ?)
+  `).run(itemId, Number(amount) || 0, String(note || ''), new Date().toISOString());
+}
+
+function getValueEvents(itemId) {
+  return db.prepare(`
+    SELECT id, item_id, amount, note, recorded_at
+    FROM item_value_events WHERE item_id = ?
+    ORDER BY recorded_at DESC, id DESC
+  `).all(itemId);
+}
+
+function getItemAudit(itemId) {
+  return db.prepare(`
+    SELECT id, item_id, field, old_value, new_value, recorded_at
+    FROM item_audit WHERE item_id = ?
+    ORDER BY recorded_at DESC, id DESC
+  `).all(itemId);
+}
+
+function cascadeFormerStatus(parentId, status, note, date) {
+  const children = db.prepare(
+    'SELECT id, studio_status FROM items WHERE parent_item_id = ?'
+  ).all(parentId);
+  const update = db.prepare(`
+    UPDATE items
+    SET studio_status = ?, studio_status_note = ?, disposition_date = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `);
+  for (const child of children) {
+    if (isFormerStatus(child.studio_status)) continue;
+    recordAuditChange(child.id, 'studio_status', child.studio_status, status);
+    update.run(status, note, date, child.id);
+    cascadeFormerStatus(child.id, status, note, date);
+  }
+}
+
+function restoreCascadedChildren(parentId, previous) {
+  const children = db.prepare(`
+    SELECT id, studio_status, studio_status_note, disposition_date
+    FROM items WHERE parent_item_id = ?
+  `).all(parentId);
+  const update = db.prepare(`
+    UPDATE items
+    SET studio_status = ?, studio_status_note = '', disposition_date = '', updated_at = datetime('now')
+    WHERE id = ?
+  `);
+  const priorStatus = db.prepare(`
+    SELECT old_value FROM item_audit
+    WHERE item_id = ? AND field = 'studio_status' AND new_value = ?
+    ORDER BY recorded_at DESC, id DESC LIMIT 1
+  `);
+  for (const child of children) {
+    if (child.studio_status !== previous.studio_status) continue;
+    if ((child.disposition_date || '') !== (previous.disposition_date || '')) continue;
+    if ((child.studio_status_note || '') !== (previous.studio_status_note || '')) continue;
+    const prior = priorStatus.get(child.id, previous.studio_status);
+    const nextStatus = prior && !isFormerStatus(prior.old_value) ? prior.old_value : 'in_studio';
+    recordAuditChange(child.id, 'studio_status', child.studio_status, nextStatus);
+    update.run(nextStatus, child.id);
+    restoreCascadedChildren(child.id, previous);
+  }
+}
+
 function sanitizeItemInput(body) {
   const str = (v, max = 2000) => String(v ?? '').trim().slice(0, max);
   const num = (v) => {
@@ -570,8 +738,17 @@ function sanitizeItemInput(body) {
   const conditions = ['New', 'Excellent', 'Good', 'Fair', 'Poor'];
   const condition = conditions.includes(body.condition) ? body.condition : 'Good';
   const updateChecks = body.update_checks_enabled === false || body.update_checks_enabled === 0 || body.update_checks_enabled === '0' ? 0 : 1;
-  const statuses = ['in_studio', 'loaned', 'in_repair', 'storage', 'away'];
+  const statuses = [...ACTIVE_STATUSES, ...FORMER_STATUSES];
   const studio_status = statuses.includes(body.studio_status) ? body.studio_status : 'in_studio';
+  const disposition_date = isFormerStatus(studio_status) ? str(body.disposition_date, 20) : '';
+  if (isFormerStatus(studio_status)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(disposition_date)) {
+      throw new Error('A date is required when gear is sold, stolen, destroyed, or given away');
+    }
+    if (!str(body.studio_status_note, 500)) {
+      throw new Error('A short note is required when gear leaves the collection');
+    }
+  }
   const parentId = body.parent_item_id != null && body.parent_item_id !== ''
     ? parseInt(body.parent_item_id, 10) : null;
   const instrument_type = sanitizeInstrumentType(body.instrument_type);
@@ -604,6 +781,7 @@ function sanitizeItemInput(body) {
     warranty_note: str(body.warranty_note, 500),
     studio_status,
     studio_status_note: str(body.studio_status_note, 500),
+    disposition_date,
     parent_item_id: parentId && !isNaN(parentId) ? parentId : null,
     depreciated_value: num(body.depreciated_value),
     on_insurance_policy: body.on_insurance_policy === true || body.on_insurance_policy === 1 || body.on_insurance_policy === '1' ? 1 : 0,
@@ -638,7 +816,7 @@ function getAssemblyTotals(itemId) {
     SELECT COUNT(*) AS component_count,
       COALESCE(SUM(purchase_price * quantity), 0) AS component_purchase,
       COALESCE(SUM(replacement_value * quantity), 0) AS component_replacement
-    FROM items WHERE id IN (SELECT id FROM descendants)
+    FROM items WHERE id IN (SELECT id FROM descendants) AND ${ownedStatusSql('studio_status')}
   `).get(itemId);
   const itemPurchase = Number(root.purchase_price || 0) * Number(root.quantity || 1);
   const itemReplacement = Number(root.replacement_value || 0) * Number(root.quantity || 1);
@@ -1089,6 +1267,7 @@ function getActiveLoans() {
     FROM loan_log l
     JOIN items i ON i.id = l.item_id
     WHERE l.returned_at IS NULL
+      AND ${ownedStatusSql('i.studio_status')}
     ORDER BY
       CASE WHEN l.due_date IS NULL OR l.due_date = '' THEN 1 ELSE 0 END,
       l.due_date ASC,
@@ -1112,6 +1291,9 @@ function getRecentLoanHistory(limit = 30) {
 }
 
 function checkoutItem(itemId, data = {}) {
+  const item = db.prepare('SELECT studio_status FROM items WHERE id = ?').get(itemId);
+  if (!item) throw new Error('Item not found');
+  if (isFormerStatus(item.studio_status)) throw new Error('Gear that has left the collection cannot be loaned');
   if (getActiveLoanForItem(itemId)) throw new Error('Item is already on loan');
 
   const borrower_name = String(data.borrower_name || '').trim();
@@ -1448,6 +1630,7 @@ function getSoftwareTotals() {
 
 module.exports = {
   db,
+  catalogLock,
   DB_PATH,
   DATA_DIR,
   UPLOADS_DIR,
@@ -1458,6 +1641,16 @@ module.exports = {
   initSchema,
   enrichItem,
   setItemTags,
+  FORMER_STATUSES,
+  isFormerStatus,
+  ownedStatusSql,
+  cascadeFormerStatus,
+  restoreCascadedChildren,
+  recordItemChanges,
+  recordReplacementValue,
+  getValueEvents,
+  getItemAudit,
+  backfillOpeningValues,
   sanitizeItemInput,
   getTagsForItem,
   getAttachmentsForItem,

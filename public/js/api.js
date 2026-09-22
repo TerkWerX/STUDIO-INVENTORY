@@ -66,15 +66,21 @@ export const api = {
   photoLink: (id, baseUrl = '') => request(`/items/${id}/photo-link${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`),
   createItem: (data) => request('/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   updateItem: (id, data) => request(`/items/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
-  deleteItem: (id) => request(`/items/${id}`, { method: 'DELETE' }),
+  deleteItem: (id, { erase = false, confirmName = '' } = {}) => request(`/items/${id}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ erase, confirmName })
+  }),
   uploadPhotos: (itemId, files) => {
     const fd = new FormData();
     for (const f of files) fd.append('files', f);
     return request(`/items/${itemId}/photos`, { method: 'POST', body: fd });
   },
-  uploadManual: (itemId, file) => {
+  uploadManual: (itemId, fileOrFiles) => {
     const fd = new FormData();
-    fd.append('file', file);
+    const list = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
+    const field = list.length > 1 ? 'files' : 'file';
+    for (const file of list) fd.append(field, file);
     return request(`/items/${itemId}/manuals`, { method: 'POST', body: fd });
   },
   archiveManual: (itemId, url, description = '') => request(`/items/${itemId}/manuals/archive`, {
@@ -82,10 +88,10 @@ export const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, description })
   }),
-  findManualsOnline: (itemId, query = '') => request(`/items/${itemId}/manuals/web-search`, {
+  findManualsOnline: (itemId, query = '', kind = 'all') => request(`/items/${itemId}/manuals/web-search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query })
+    body: JSON.stringify({ query, kind })
   }),
   discoverManualLinks: (itemId, url) => request(`/items/${itemId}/manuals/discover`, {
     method: 'POST',
@@ -131,6 +137,22 @@ export const api = {
   }),
   documents: () => request('/documents'),
   exportFullBackup: () => window.open(downloadUrl('/export/full'), '_blank'),
+  backupFolder: () => request('/backup/folder'),
+  setBackupFolder: (dir, keep) => request('/backup/folder', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dir, keep })
+  }),
+  runFolderBackup: () => request('/backup/folder/run', { method: 'POST' }),
+  refreshRecoveryCopy: () => request('/backup/recovery-copy', { method: 'POST' }),
+  recoveryKey: () => request('/backup/recovery-key'),
+  confirmRecoveryKey: (recoveryKey) => request('/backup/recovery-key/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recoveryKey })
+  }),
+  moveBackupLeftovers: () => request('/backup/move-leftovers', { method: 'POST' }),
+  encryptCatalog: () => request('/backup/encrypt', { method: 'POST' }),
   exportJson: () => window.open(downloadUrl('/export/json'), '_blank'),
   exportSql: () => window.open(downloadUrl('/export/sql'), '_blank'),
   exportCsv: (params = {}) => {
@@ -142,13 +164,14 @@ export const api = {
     fd.append('backup', file);
     return request('/import/full', { method: 'POST', body: fd });
   },
-  importJson: (data, replace = false) => request('/import/json', {
+  importJson: (data, replace = false, confirmPhrase = '') => request('/import/json', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       items: data.items || data,
       software_licenses: Array.isArray(data.software_licenses) ? data.software_licenses : undefined,
-      replace
+      replace,
+      confirmPhrase
     })
   }),
   importCsv: (csvText) => request('/import/csv', {
@@ -254,7 +277,11 @@ export const api = {
   softwareItem: (id) => request(`/software/${id}`),
   createSoftware: (data) => request('/software', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   updateSoftware: (id, data) => request(`/software/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
-  deleteSoftware: (id) => request(`/software/${id}`, { method: 'DELETE' }),
+  deleteSoftware: (id, { erase = false, confirmName = '' } = {}) => request(`/software/${id}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ erase, confirmName })
+  }),
   uploadSoftwareScreenshot: (id, file) => {
     const fd = new FormData();
     fd.append('screenshot', file);

@@ -2,13 +2,25 @@ import { formatCurrency, formatDate } from '../utils.js';
 import { renderBrandCarousel } from './brands.js';
 import { STUDIO_STATUS_LABELS } from '../lib/completeness-ui.js';
 
-function backupAgeLabel() {
-  const last = localStorage.getItem('lastBackup');
-  if (!last) return { text: 'No backup recorded', warn: true };
-  const days = Math.floor((Date.now() - parseInt(last, 10)) / 86400000);
-  if (days > 30) return { text: `Last backup ${days} days ago`, warn: true };
-  if (days > 7) return { text: `Last backup ${days} days ago`, warn: false };
-  return { text: days === 0 ? 'Backed up today' : `Backed up ${days} day${days !== 1 ? 's' : ''} ago`, warn: false };
+function backupSuccessText(backup) {
+  if (!backup.lastAt) return '';
+  const days = Math.floor((Date.now() - Date.parse(backup.lastAt)) / 86400000);
+  if (!Number.isFinite(days)) return '';
+  if (days > 7) return `Last good copy ${days} days ago`;
+  return days === 0 ? 'Last good copy today' : `Last good copy ${days} day${days !== 1 ? 's' : ''} ago`;
+}
+
+function backupAgeLabel(backup) {
+  if (!backup?.configured) return { text: 'No backup folder set', warn: true };
+  const success = backupSuccessText(backup);
+  if (backup.lastError) {
+    return { text: success ? `Last backup failed. ${success}.` : 'Last backup failed', warn: true };
+  }
+  if (!backup.lastAt) return { text: 'No backup recorded', warn: true };
+  if (!success) return { text: 'No backup recorded', warn: true };
+  const days = Math.floor((Date.now() - Date.parse(backup.lastAt)) / 86400000);
+  if (days > 7) return { text: `Last folder backup ${days} days ago`, warn: true };
+  return { text: days === 0 ? 'Folder backup today' : `Folder backup ${days} day${days !== 1 ? 's' : ''} ago`, warn: false };
 }
 
 export function renderDashboard(stats, brands = []) {
@@ -17,7 +29,7 @@ export function renderDashboard(stats, brands = []) {
     warrantyExpiring, awayItems, activeLoans, overdueLoanCount, activeLoanCount,
     softwareTotals, softwareRenewals, softwareRenewalCount, softwareOverdueCount
   } = stats;
-  const backup = backupAgeLabel();
+  const backup = backupAgeLabel(stats.backup);
   const gaps = completeness?.gaps || {};
 
   return `

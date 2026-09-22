@@ -1,0 +1,86 @@
+name: Build 2.8.0 Mac and Linux
+on:
+  push:
+    branches: [codex/build-2.8.0-mac-linux]
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            label: macOS
+          - os: ubuntu-22.04
+            platform: linux
+            label: Linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Package native runtime and dependencies
+        run: node scripts/package-release.js ${{ matrix.platform }} dist/studio-inventory-${{ matrix.platform }}
+      - name: Verify packaged server and native database
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/dist/studio-inventory-${{ matrix.platform }}"
+          export PORT=3892 STUDIO_DATA_DIR="$RUNNER_TEMP/test-data" STUDIO_SKIP_UPDATE_CHECK=1
+          "$app/.runtime/node" "$app/server.js" > "$RUNNER_TEMP/server.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3892/api/health > "$RUNNER_TEMP/health.json"; then break; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/server.log"
+          "$app/.runtime/node" -e 'const h=require(process.env.RUNNER_TEMP+"/health.json"); if(!h.ok) process.exit(1); console.log(h); const p=require(process.cwd()+"/package.json"); if(p.version!=="2.8.0") process.exit(1);'
+          file "$app/.runtime/node"
+          find "$app/node_modules" -name '*.node' -exec file {} \;
+      - name: Test Linux installation and upgrade preservation
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/installed"
+          bash 'dist/studio-inventory-linux/Install Studio Inventory.sh' --target "$target" --no-start --no-shortcuts
+          echo preserved > "$target/data/upgrade-check.txt"
+          bash 'dist/studio-inventory-linux/Install Studio Inventory.sh' --target "$target" --no-start --no-shortcuts
+          test "$(cat "$target/data/upgrade-check.txt")" = preserved
+          "$target/.runtime/node" -e 'require(process.argv[1])' "$target/node_modules/better-sqlite3-multiple-ciphers"
+      - name: Test Mac installation and upgrade preservation
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/mac-test-home"
+          mkdir -p "$HOME/Desktop"
+          printf 'n\n' | bash 'dist/studio-inventory-mac/Install Studio Inventory.command'
+          target="$HOME/Applications/Studio Inventory"
+          echo preserved > "$target/data/upgrade-check.txt"
+          printf 'n\n' | bash 'dist/studio-inventory-mac/Install Studio Inventory.command'
+          test "$(cat "$target/data/upgrade-check.txt")" = preserved
+          test -x "$target/.runtime/node"
+      - name: Create archives
+        shell: bash
+        run: |
+          cd dist
+          zip -qr 'Studio-Inventory-v2.8.0-${{ matrix.label }}.zip' studio-inventory-${{ matrix.platform }}
+          if [ '${{ matrix.platform }}' = mac ]; then
+            hdiutil create -volname 'Studio Inventory 2.8.0' -srcfolder studio-inventory-mac -ov -format UDZO Studio-Inventory-v2.8.0-macOS.dmg
+            hdiutil verify Studio-Inventory-v2.8.0-macOS.dmg
+          else
+            tar -czf Studio-Inventory-v2.8.0-Linux-x64.tar.gz studio-inventory-linux
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Studio-Inventory-v2.8.0-${{ matrix.label }}
+          path: dist/Studio-Inventory-v2.8.0-*
+          compression-level: 0
+          retention-days: 14

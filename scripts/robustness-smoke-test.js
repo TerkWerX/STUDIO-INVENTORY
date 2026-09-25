@@ -156,6 +156,56 @@ async function main() {
     assert((await request('/api/signal-chains/99999', { method: 'DELETE' })).status === 404, 'deleting a missing chain should be a 404');
     console.log('✓ racks and signal chains validate their gear lists');
 
+    // Two devices editing the same rack, chain or room map keep each other's changes.
+    const makeItem = async (name, location) => (await request('/api/items', { method: 'POST', json: { name, location } })).json;
+    const amp = await makeItem('Shared amp', 'Control Room');
+    const comp = await makeItem('Shared comp', 'Control Room');
+    const liveEq = await makeItem('Live room EQ', 'Live Room');
+    const shared = (await request('/api/racks', { method: 'POST', json: { name: 'Shared rack' } })).json;
+    const addA = await request(`/api/racks/${shared.id}/items`, { method: 'POST', json: { item_id: amp.id, slot_label: 'U1' } });
+    const addB = await request(`/api/racks/${shared.id}/items`, { method: 'POST', json: { item_id: comp.id, slot_label: 'U2' } });
+    assert(addA.status === 201 && addB.status === 201, `adding to a rack failed: ${addA.status} ${addB.status} ${addB.text}`);
+    assert(JSON.stringify(addB.json.items.map(i => [i.id, i.slot_label])) === JSON.stringify([[amp.id, 'U1'], [comp.id, 'U2']]),
+      `a second device's rack change undid the first: ${addB.text}`);
+    assert((await request(`/api/racks/${shared.id}/items`, { method: 'POST', json: { item_id: amp.id } })).status === 409, 'adding gear twice should be a 409');
+    assert((await request(`/api/racks/${shared.id}/items`, { method: 'POST', json: { item_id: 99999 } })).status === 400, 'adding unknown gear should be a 400');
+    assert((await request('/api/racks/99999/items', { method: 'POST', json: { item_id: amp.id } })).status === 404, 'adding to a missing rack should be a 404');
+    const fromRack = await request(`/api/racks/${shared.id}/items/${amp.id}`, { method: 'DELETE' });
+    assert(fromRack.status === 200 && JSON.stringify(fromRack.json.items.map(i => i.id)) === JSON.stringify([comp.id]), `removing from a rack: ${fromRack.text}`);
+    assert((await request(`/api/racks/${shared.id}/items/${amp.id}`, { method: 'DELETE' })).status === 200, 'removing gear that is already gone should be fine');
+
+    const chain = (await request('/api/signal-chains', { method: 'POST', json: { name: 'Vocal chain' } })).json;
+    await request(`/api/signal-chains/${chain.id}/items`, { method: 'POST', json: { item_id: amp.id } });
+    await request(`/api/signal-chains/${chain.id}/items`, { method: 'POST', json: { item_id: comp.id } });
+    await request(`/api/signal-chains/${chain.id}/items/${amp.id}`, { method: 'DELETE' });
+    const reAdded = await request(`/api/signal-chains/${chain.id}/items`, { method: 'POST', json: { item_id: amp.id } });
+    assert(reAdded.status === 201 && JSON.stringify(reAdded.json.items.map(i => i.id)) === JSON.stringify([comp.id, amp.id]),
+      `signal chain order after remove and re-add: ${reAdded.text}`);
+    assert((await request(`/api/signal-chains/${chain.id}/items`, { method: 'POST', json: { item_id: comp.id } })).status === 409, 'a chain entry twice should be a 409');
+
+    const pins = `/api/floorplans/${room.json.id}/items`;
+    const hung = await request(pins, { method: 'PATCH', json: { upsert: [{
+      item_id: amp.id, placement: 'wall', wall_edge: 1, wall_t: 0.25, height_ft: 4, photo_calibration: { corners: 4 }
+    }] } });
+    assert(hung.status === 200, `placing a pin failed: ${hung.status} ${hung.text}`);
+    const placedB = await request(pins, { method: 'PATCH', json: { upsert: [{ item_id: comp.id, x_pct: 20, y_pct: 30 }] } });
+    assert(placedB.json.items.length === 2, `a second device's pin removed the first: ${placedB.text}`);
+    const slid = await request(pins, { method: 'PATCH', json: { upsert: [{ item_id: amp.id, wall_t: 0.5 }] } });
+    const ampPin = slid.json.items.find(p => p.id === amp.id);
+    assert(ampPin.placement === 'wall' && ampPin.wall_edge === 1 && ampPin.wall_t === 0.5 && ampPin.height_ft === 4
+      && ampPin.photo_calibration?.corners === 4, `moving a pin lost its other settings: ${JSON.stringify(ampPin)}`);
+    const wrongRoom = await request(pins, { method: 'PATCH', json: { upsert: [{ item_id: liveEq.id, x_pct: 5 }] } });
+    assert(wrongRoom.status === 400 && /Live Room/.test(wrongRoom.json.error), `pinning gear from another room: ${wrongRoom.status} ${wrongRoom.text}`);
+    assert((await request(pins, { method: 'PATCH', json: { upsert: 'x' } })).status === 400, 'a bad pin list should be a 400');
+    assert((await request(pins, { method: 'PATCH', json: { remove: ['a'] } })).status === 400, 'a bad remove list should be a 400');
+    assert((await request('/api/floorplans/99999/items', { method: 'PATCH', json: { upsert: [] } })).status === 404, 'a missing room should be a 404');
+    const unpinned = await request(pins, { method: 'PATCH', json: { remove: [comp.id] } });
+    assert(JSON.stringify(unpinned.json.items.map(p => p.id)) === JSON.stringify([amp.id]), `removing one pin: ${unpinned.text}`);
+    // Saving a whole list without the wall-photo calibration keeps it (older clients left it out).
+    const fullList = await request(pins, { method: 'PUT', json: { items: [{ item_id: amp.id, x_pct: 10, y_pct: 10, placement: 'wall', wall_edge: 1 }] } });
+    assert(fullList.json.items[0].photo_calibration?.corners === 4, `a full pin list wiped the calibration: ${fullList.text}`);
+    console.log('✓ two devices editing a rack, chain or room map keep each other\'s changes');
+
     // Loans: dates must be real dates; returning doesn't undo a later status change.
     const lent = first.json.id;
     const badDue = await request(`/api/items/${lent}/loans`, { method: 'POST', json: { borrower_name: 'Sam', due_date: '1/5/2027' } });

@@ -34,7 +34,7 @@ const {
   getRacks, getSignalChains,
   getFloorplans, getFloorplan, createFloorplan, updateFloorplanImage, clearFloorplanFloorImage,
   updateFloorplanFloorView, updateFloorplanGeometry,
-  setFloorplanItems, deleteFloorplan, getItemMapPlacement, saveItemWallCutout, clearItemWallCutout, wallPhotoDir,
+  setFloorplanItems, updateFloorplanItems, deleteFloorplan, getItemMapPlacement, saveItemWallCutout, clearItemWallCutout, wallPhotoDir,
   floorplanWallPhotosDir, updateFloorplanWallPhoto, updateFloorplanWallCalibration, resolveWallRehang,
   SOFTWARE_CATEGORIES, LICENSE_TYPES, ACTIVATION_METHODS, PLUGIN_FORMATS,
   softwareLicenseDir, getAllSoftware, getSoftware, createSoftware, updateSoftware,
@@ -1511,12 +1511,17 @@ app.put('/api/floorplans/:id/geometry', (req, res) => {
   }
 });
 
+// Replaces every pin; kept for scripts. The app sends PATCH, which only changes the pins it names.
 app.put('/api/floorplans/:id/items', (req, res) => {
   try {
     res.json(setFloorplanItems(req.params.id, req.body.items || []));
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(/not found/i.test(err.message) ? 404 : 400).json({ error: err.message });
   }
+});
+
+app.patch('/api/floorplans/:id/items', (req, res) => {
+  res.json(updateFloorplanItems(req.params.id, req.body || {}));
 });
 
 app.delete('/api/floorplans/:id', (req, res) => {
@@ -1711,6 +1716,44 @@ app.put('/api/signal-chains/:id/items', (req, res) => {
   tx();
   res.json(getSignalChains().find(x => x.id === Number(req.params.id)));
 });
+
+/**
+ * Add or remove one piece of gear in a rack or signal chain. The app changes one
+ * entry at a time instead of re-sending the whole list, so two devices editing
+ * the same rack can't undo each other. (The PUT routes above replace the whole
+ * list and are kept for scripts.)
+ */
+const MEMBER_LISTS = [
+  { route: 'racks', owner: 'racks', table: 'rack_items', key: 'rack_id', noun: 'rack', load: getRacks, slots: true },
+  { route: 'signal-chains', owner: 'signal_chains', table: 'signal_chain_items', key: 'chain_id', noun: 'signal chain', load: getSignalChains, slots: false }
+];
+for (const list of MEMBER_LISTS) {
+  const found = (id) => db.prepare(`SELECT id FROM ${list.owner} WHERE id = ?`).get(id);
+  const current = (id) => list.load().find(x => x.id === Number(id));
+  const notFound = `${list.noun[0].toUpperCase()}${list.noun.slice(1)} not found`;
+
+  app.post(`/api/${list.route}/:id/items`, (req, res) => {
+    if (!found(req.params.id)) return res.status(404).json({ error: notFound });
+    const [entry] = memberItemsFromInput([{ item_id: req.body?.item_id }]);
+    const columns = list.slots ? `${list.key}, item_id, position, slot_label` : `${list.key}, item_id, position`;
+    const values = list.slots ? '?, ?, COALESCE(MAX(position), -1) + 1, ?' : '?, ?, COALESCE(MAX(position), -1) + 1';
+    const params = [req.params.id, entry.item_id];
+    if (list.slots) params.push(String(req.body?.slot_label ?? '').slice(0, 50));
+    const added = db.prepare(`
+      INSERT OR IGNORE INTO ${list.table} (${columns})
+      SELECT ${values} FROM ${list.table} WHERE ${list.key} = ?
+    `).run(...params, req.params.id);
+    if (!added.changes) return res.status(409).json({ error: `That item is already in this ${list.noun}.` });
+    res.status(201).json(current(req.params.id));
+  });
+
+  // Removing something that's already gone (another device got there first) is fine.
+  app.delete(`/api/${list.route}/:id/items/:itemId`, (req, res) => {
+    if (!found(req.params.id)) return res.status(404).json({ error: notFound });
+    db.prepare(`DELETE FROM ${list.table} WHERE ${list.key} = ? AND item_id = ?`).run(req.params.id, req.params.itemId);
+    res.json(current(req.params.id));
+  });
+}
 
 app.get('/api/manuals/search', (req, res) => {
   res.json(searchManuals(db, req.query.q));

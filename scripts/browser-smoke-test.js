@@ -214,6 +214,46 @@ async function main() {
         && (img.src.startsWith('data:image') || img.src.includes('/uploads/'));
     }, { timeout: 20000 });
     console.log('✓ studio view wall elevation displays');
+
+    // Two devices: the room map was opened before another device pinned its gear.
+    // Placing an item from that page must keep the other device's pin.
+    const twoDevice = await page.evaluate(async (id) => {
+      const fp = (await fetch('/api/floorplans').then(r => r.json())).find(f => f.id === id);
+      const make = (name) => fetch('/api/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, location: fp.location })
+      }).then(r => r.json());
+      return { otherId: (await make('Other device amp')).id, placedId: (await make('Placed here mic')).id };
+    }, fpId);
+    const mapPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    try {
+      await mapPage.goto(`${BASE}/map.html?fp=${fpId}&place=${twoDevice.placedId}`);
+      await mapPage.waitForSelector('#map-place-pin', { timeout: 20000 });
+      await page.evaluate(async ({ id, otherId }) => {
+        const fp = (await fetch('/api/floorplans').then(r => r.json())).find(f => f.id === id);
+        const items = fp.items.map(p => ({ item_id: p.id, x_pct: p.x_pct, y_pct: p.y_pct, placement: p.placement }))
+          .concat({ item_id: otherId, x_pct: 70, y_pct: 70, placement: 'floor' });
+        await fetch(`/api/floorplans/${id}/items`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items })
+        });
+      }, { id: fpId, otherId: twoDevice.otherId });
+      const box = await mapPage.locator('#map-place-pin').boundingBox();
+      await mapPage.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await mapPage.mouse.down();
+      await mapPage.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 40, { steps: 5 });
+      await mapPage.mouse.up();
+      await mapPage.waitForFunction(() => /placed on floor/i.test(document.getElementById('map-room-label')?.textContent || ''), null, { timeout: 15000 });
+      const pinned = await page.evaluate(async (id) => (await fetch('/api/floorplans').then(r => r.json()))
+        .find(f => f.id === id).items.map(p => p.id), fpId);
+      assert(pinned.includes(twoDevice.placedId), `the placed item is not on the map: ${JSON.stringify(pinned)}`);
+      assert(pinned.includes(twoDevice.otherId), `placing from an older map page removed another device's pin: ${JSON.stringify(pinned)}`);
+    } finally {
+      await mapPage.close();
+    }
+    console.log('✓ placing from an older map page keeps other devices\' pins');
     await page.click('#wall-elevation-overlay .wall-elevation-close');
     await page.waitForFunction(
       () => document.getElementById('wall-elevation-overlay')?.classList.contains('hidden'),

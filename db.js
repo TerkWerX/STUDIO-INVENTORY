@@ -1192,46 +1192,143 @@ function updateFloorplanGeometry(id, body = {}) {
   return getFloorplan(id);
 }
 
+const PIN_INPUT_FIELDS = [
+  'x_pct', 'y_pct', 'placement', 'wall_edge', 'wall_t', 'height_ft', 'icon_mode', 'wall_photo_path',
+  'photo_width_ft', 'photo_height_ft', 'rotation_deg', 'photo_calibration', 'wall_display'
+];
+
+function inputError(message, status = 400) {
+  return Object.assign(new Error(message), { status, expose: true });
+}
+
+/** A saved pin in the shape the API accepts, so an update can keep whatever it leaves out. */
+function storedPinInput(row) {
+  if (!row) return null;
+  return {
+    x_pct: row.x_pct,
+    y_pct: row.y_pct,
+    placement: row.placement,
+    wall_edge: row.wall_edge,
+    wall_t: row.wall_t,
+    height_ft: row.height_ft,
+    icon_mode: row.icon_mode,
+    wall_photo_path: row.wall_photo_path,
+    photo_width_ft: row.photo_width_ft,
+    photo_height_ft: row.photo_height_ft,
+    rotation_deg: row.rotation_deg,
+    photo_calibration: safeJsonParse(row.photo_calibration_json),
+    wall_display: row.wall_display !== 0
+  };
+}
+
+/**
+ * Column values for one map pin, in PIN_COLUMNS order. Fields the input leaves
+ * out keep their saved value, so a device that only knows where a pin is can't
+ * wipe the wall-photo calibration or loan state another device saved.
+ */
+function pinColumns(input, previous) {
+  const row = { ...(previous || {}) };
+  for (const key of PIN_INPUT_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(input, key) && input[key] !== undefined) row[key] = input[key];
+  }
+  if (input.photo_calibration === undefined && input.photo_calibration_json !== undefined) {
+    row.photo_calibration = safeJsonParse(input.photo_calibration_json);
+  }
+  const placement = row.placement === 'wall' ? 'wall' : 'floor';
+  const edge = parseInt(row.wall_edge, 10);
+  const wall_edge = placement === 'wall' && Number.isInteger(edge) && edge >= 0 ? Math.min(47, edge) : null;
+  const wall_t = placement === 'wall' && row.wall_t != null && row.wall_t !== ''
+    ? Math.min(1, Math.max(0, parseFloat(row.wall_t) || 0)) : null;
+  const height_ft = row.height_ft != null && row.height_ft !== ''
+    ? Math.max(0, parseFloat(row.height_ft) || 0) : null;
+  const calibration = row.photo_calibration && typeof row.photo_calibration === 'object' ? row.photo_calibration : {};
+  return [
+    Math.min(100, Math.max(0, finiteOr(row.x_pct, 50))),
+    Math.min(100, Math.max(0, finiteOr(row.y_pct, 50))),
+    placement,
+    wall_edge,
+    wall_t,
+    height_ft,
+    row.icon_mode === 'photo' ? 'photo' : 'logo',
+    String(row.wall_photo_path || '').slice(0, 500),
+    Math.max(0, parseFloat(row.photo_width_ft) || 0),
+    Math.max(0, parseFloat(row.photo_height_ft) || 0),
+    Math.max(-180, Math.min(180, parseFloat(row.rotation_deg) || 0)),
+    JSON.stringify(calibration),
+    row.wall_display === false || row.wall_display === 0 || row.wall_display === '0' ? 0 : 1
+  ];
+}
+
+const SAVE_PIN_SQL = `
+  INSERT OR REPLACE INTO floorplan_items (
+    floorplan_id, item_id, x_pct, y_pct, placement, wall_edge, wall_t,
+    height_ft, icon_mode, wall_photo_path, photo_width_ft, photo_height_ft,
+    rotation_deg, photo_calibration_json, wall_display
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`;
+
+/**
+ * Replace every pin on a room map. Kept for scripts and older clients; the app
+ * itself uses updateFloorplanItems, which only touches the pins it names.
+ */
 function setFloorplanItems(floorplanId, items) {
   const fp = db.prepare('SELECT id, location FROM floorplans WHERE id = ?').get(floorplanId);
   if (!fp) throw new Error('Floorplan not found');
 
   const tx = db.transaction(() => {
+    const saved = new Map(db.prepare('SELECT * FROM floorplan_items WHERE floorplan_id = ?')
+      .all(floorplanId).map(row => [row.item_id, storedPinInput(row)]));
     db.prepare('DELETE FROM floorplan_items WHERE floorplan_id = ?').run(floorplanId);
-    const insert = db.prepare(`
-      INSERT INTO floorplan_items (
-        floorplan_id, item_id, x_pct, y_pct, placement, wall_edge, wall_t,
-        height_ft, icon_mode, wall_photo_path, photo_width_ft, photo_height_ft,
-        rotation_deg, photo_calibration_json, wall_display
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const save = db.prepare(SAVE_PIN_SQL);
     for (const row of items || []) {
+      if (!row || typeof row !== 'object') continue;
       const itemId = parseInt(row.item_id, 10);
       if (!itemId) continue;
       const item = db.prepare('SELECT id, location FROM items WHERE id = ?').get(itemId);
       if (!item || item.location !== fp.location) continue;
-      const x = Math.min(100, Math.max(0, parseFloat(row.x_pct) || 50));
-      const y = Math.min(100, Math.max(0, parseFloat(row.y_pct) || 50));
-      const placement = row.placement === 'wall' ? 'wall' : 'floor';
-      const wall_edge = placement === 'wall' && row.wall_edge != null && row.wall_edge !== ''
-        ? parseInt(row.wall_edge, 10) : null;
-      const wall_t = placement === 'wall' && row.wall_t != null && row.wall_t !== ''
-        ? Math.min(1, Math.max(0, parseFloat(row.wall_t) || 0)) : null;
-      const height_ft = row.height_ft != null && row.height_ft !== ''
-        ? Math.max(0, parseFloat(row.height_ft) || 0) : null;
-      const icon_mode = row.icon_mode === 'photo' ? 'photo' : 'logo';
-      const wall_photo_path = String(row.wall_photo_path || '').slice(0, 500);
-      const photo_width_ft = Math.max(0, parseFloat(row.photo_width_ft) || 0);
-      const photo_height_ft = Math.max(0, parseFloat(row.photo_height_ft) || 0);
-      const rotation_deg = Math.max(-180, Math.min(180, parseFloat(row.rotation_deg) || 0));
-      const photo_calibration_json = JSON.stringify(
-        row.photo_calibration && typeof row.photo_calibration === 'object'
-          ? row.photo_calibration : safeJsonParse(row.photo_calibration_json)
-      );
-      const wall_display = row.wall_display === false || row.wall_display === 0 || row.wall_display === '0' ? 0 : 1;
-      insert.run(floorplanId, itemId, x, y, placement, wall_edge, wall_t,
-        height_ft, icon_mode, wall_photo_path, photo_width_ft, photo_height_ft,
-        rotation_deg, photo_calibration_json, wall_display);
+      save.run(floorplanId, itemId, ...pinColumns(row, saved.get(itemId)));
+    }
+  });
+  tx();
+  return getFloorplan(floorplanId);
+}
+
+/**
+ * Change only the pins named: `upsert` adds or moves pins (fields left out keep
+ * their saved values), `remove` takes items off the map. Pins placed by other
+ * devices are never touched, so two people arranging a room can't undo each other.
+ */
+function updateFloorplanItems(floorplanId, body = {}) {
+  const fp = db.prepare('SELECT id, location FROM floorplans WHERE id = ?').get(floorplanId);
+  if (!fp) throw inputError('Floorplan not found', 404);
+  const upsert = body.upsert ?? [];
+  const remove = body.remove ?? [];
+  if (!Array.isArray(upsert) || !Array.isArray(remove)) throw inputError('upsert and remove must be lists');
+  if (upsert.length + remove.length > 500) throw inputError('Too many map changes in one request');
+  const removeIds = remove.map((value) => {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id < 1) throw inputError('remove must list item ids');
+    return id;
+  });
+  const pins = upsert.map((pin, index) => {
+    if (!pin || typeof pin !== 'object' || Array.isArray(pin)) throw inputError(`Pin ${index + 1} is not valid`);
+    const itemId = Number(pin.item_id);
+    if (!Number.isInteger(itemId) || itemId < 1) throw inputError(`Pin ${index + 1} has no valid item_id`);
+    return { itemId, pin };
+  });
+
+  const tx = db.transaction(() => {
+    const drop = db.prepare('DELETE FROM floorplan_items WHERE floorplan_id = ? AND item_id = ?');
+    for (const itemId of removeIds) drop.run(floorplanId, itemId);
+    const save = db.prepare(SAVE_PIN_SQL);
+    const current = db.prepare('SELECT * FROM floorplan_items WHERE floorplan_id = ? AND item_id = ?');
+    for (const { itemId, pin } of pins) {
+      const item = db.prepare('SELECT id, name, location FROM items WHERE id = ?').get(itemId);
+      if (!item) throw inputError(`Item ${itemId} not found`);
+      if (item.location !== fp.location) {
+        throw inputError(`${item.name} is in "${item.location || 'no room'}", not "${fp.location}". Change its location first.`);
+      }
+      save.run(floorplanId, itemId, ...pinColumns(pin, storedPinInput(current.get(floorplanId, itemId))));
     }
   });
   tx();
@@ -1893,6 +1990,7 @@ module.exports = {
   updateFloorplanFloorView,
   updateFloorplanGeometry,
   setFloorplanItems,
+  updateFloorplanItems,
   deleteFloorplan,
   getItemMapPlacement,
   saveItemWallCutout,

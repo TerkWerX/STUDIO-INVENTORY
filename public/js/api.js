@@ -227,11 +227,14 @@ export const api = {
   racks: () => request('/racks'),
   createRack: (data) => request('/racks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   deleteRack: (id) => request(`/racks/${id}`, { method: 'DELETE' }),
-  setRackItems: (id, items) => request(`/racks/${id}/items`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) }),
+  // Racks, chains and map pins change one entry at a time, so two devices can't undo each other's edits.
+  addRackItem: (id, itemId, slotLabel = '') => request(`/racks/${id}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId, slot_label: slotLabel }) }),
+  removeRackItem: (id, itemId) => request(`/racks/${id}/items/${itemId}`, { method: 'DELETE' }),
   signalChains: () => request('/signal-chains'),
   createSignalChain: (data) => request('/signal-chains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   deleteSignalChain: (id) => request(`/signal-chains/${id}`, { method: 'DELETE' }),
-  setSignalChainItems: (id, items) => request(`/signal-chains/${id}/items`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) }),
+  addSignalChainItem: (id, itemId) => request(`/signal-chains/${id}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id: itemId }) }),
+  removeSignalChainItem: (id, itemId) => request(`/signal-chains/${id}/items/${itemId}`, { method: 'DELETE' }),
   brandLogoSettings: () => request('/settings/brand-logos'),
   updateBrandLogoSettings: (lookups) => request('/settings/brand-logos', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lookups: !!lookups }) }),
   guestSettings: () => request('/settings/guest'),
@@ -269,10 +272,11 @@ export const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   }),
-  setFloorplanItems: (id, items) => request(`/floorplans/${id}/items`, {
-    method: 'PUT',
+  /** upsert: pins to add or move (fields left out keep their saved values); remove: item ids to take off the map. */
+  updateFloorplanItems: (id, { upsert = [], remove = [] } = {}) => request(`/floorplans/${id}/items`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items })
+    body: JSON.stringify({ upsert, remove })
   }),
   deleteFloorplan: (id) => request(`/floorplans/${id}`, { method: 'DELETE' }),
   itemPlacement: (id) => request(`/items/${id}/placement`),

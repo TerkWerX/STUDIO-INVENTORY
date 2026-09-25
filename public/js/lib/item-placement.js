@@ -6,32 +6,9 @@ import {
 import { openWallElevation } from './wall-elevation.js';
 import { openWallPhotoEditor } from './wall-photo-editor.js';
 
-function buildPinPayload(fp) {
-  return (fp?.items || []).map(p => ({
-    item_id: p.id,
-    x_pct: p.x_pct,
-    y_pct: p.y_pct,
-    placement: p.placement || 'floor',
-    wall_edge: p.wall_edge,
-    wall_t: p.wall_t,
-    height_ft: p.height_ft,
-    icon_mode: p.icon_mode,
-    wall_photo_path: p.wall_photo_path,
-    photo_width_ft: p.photo_width_ft,
-    photo_height_ft: p.photo_height_ft,
-    rotation_deg: p.rotation_deg || 0,
-    wall_display: p.wall_display !== false
-  }));
-}
-
-async function mergePinUpdates(api, fp, updates) {
-  const pins = buildPinPayload(fp);
-  for (const u of updates) {
-    const row = pins.find(p => p.item_id === u.item_id);
-    if (row) Object.assign(row, u);
-    else pins.push({ item_id: u.item_id, x_pct: 50, y_pct: 50, ...u });
-  }
-  return api.setFloorplanItems(fp.id, pins);
+/** Save only the pins that changed; pins placed meanwhile on other devices are kept. */
+function mergePinUpdates(api, fp, updates) {
+  return api.updateFloorplanItems(fp.id, { upsert: updates });
 }
 
 async function ensureFloorplan(api, item, floorplans) {
@@ -191,10 +168,7 @@ function openWallPlacement({ fp, item, edge, api, onDone, onToast }) {
         pin,
         unit: fp.unit || 'ft',
         onSave: async (patch) => {
-          const pins = buildPinPayload(fp);
-          const row = pins.find(p => p.item_id === pin.id);
-          if (row) Object.assign(row, { placement: 'wall', wall_display: true, ...patch });
-          await api.setFloorplanItems(fp.id, pins);
+          await mergePinUpdates(api, fp, [{ item_id: pin.id, placement: 'wall', wall_display: true, ...patch }]);
           await api.saveWallCutout(pin.id, patch).catch(() => {});
           onToast?.('Wall photo hang updated', 'success');
         },
@@ -264,8 +238,7 @@ export async function openItemPlacement({ item, floorplans, racks, api, onToast,
   if (choice === 'remove') {
     const fp = await ensureFloorplan(api, item, floorplans);
     if (!fp) return;
-    const pins = buildPinPayload(fp).filter(p => p.item_id !== item.id);
-    await api.setFloorplanItems(fp.id, pins);
+    await api.updateFloorplanItems(fp.id, { remove: [item.id] });
     onToast?.('Removed from room map', 'success');
     onDone?.();
     return;
@@ -275,14 +248,7 @@ export async function openItemPlacement({ item, floorplans, racks, api, onToast,
     const rack = await pickRack(racks, item, onToast);
     if (!rack) return;
     const slot = window.prompt(`Slot label for ${rack.name} (e.g. U4):`, '') || '';
-    const items = [...(rack.items || []).map((s, i) => ({
-      item_id: s.id, position: i, slot_label: s.slot_label || ''
-    })), {
-      item_id: item.id,
-      position: rack.items?.length || 0,
-      slot_label: slot
-    }];
-    await api.setRackItems(rack.id, items);
+    await api.addRackItem(rack.id, item.id, slot);
     onToast?.(`Added to rack “${rack.name}”`, 'success');
     onDone?.();
     return;

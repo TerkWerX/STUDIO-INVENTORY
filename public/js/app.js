@@ -2024,67 +2024,67 @@ function bindStudioSetupEvents() {
     });
   });
 
+  // Each button changes one entry, so edits made meanwhile on another device are kept.
+  const showStudioTab = (tab) => {
+    state.studioTab = tab;
+    return refreshIfShowing('studio-setup');
+  };
+
   container.querySelectorAll('[data-action="rack-add-item"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', singleFlight(async () => {
       const rackId = btn.dataset.rack;
       const select = container.querySelector(`.rack-add-select[data-rack="${rackId}"]`);
       const slotInput = container.querySelector(`.rack-slot-input[data-rack="${rackId}"]`);
       const itemId = select?.value;
       if (!itemId) return showToast('Select an item', 'error');
-      const rack = await api.racks().then(rs => rs.find(r => String(r.id) === String(rackId)));
-      const items = [...(rack?.items || []).map((s, i) => ({
-        item_id: s.id, position: i, slot_label: s.slot_label || ''
-      })), {
-        item_id: Number(itemId),
-        position: (rack?.items?.length || 0),
-        slot_label: slotInput?.value || ''
-      }];
-      await api.setRackItems(rackId, items);
-      showToast('Added to rack', 'success');
-      state.studioTab = 'racks';
-      navigate('studio-setup');
-    });
+      try {
+        await api.addRackItem(rackId, Number(itemId), slotInput?.value || '');
+        showToast('Added to rack', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+        if (err.status !== 409) return; // already there (maybe added on another device): show the latest
+      }
+      await showStudioTab('racks');
+    }));
   });
 
   container.querySelectorAll('[data-action="rack-remove-item"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const rackId = btn.dataset.rack;
-      const removeId = Number(btn.dataset.item);
-      const rack = await api.racks().then(rs => rs.find(r => String(r.id) === String(rackId)));
-      const items = (rack?.items || []).filter(s => s.id !== removeId).map((s, i) => ({
-        item_id: s.id, position: i, slot_label: s.slot_label || ''
-      }));
-      await api.setRackItems(rackId, items);
-      navigate('studio-setup');
-    });
+    btn.addEventListener('click', singleFlight(async () => {
+      try {
+        await api.removeRackItem(btn.dataset.rack, Number(btn.dataset.item));
+      } catch (err) {
+        return showToast(err.message, 'error');
+      }
+      await showStudioTab('racks');
+    }));
   });
 
   container.querySelectorAll('[data-action="chain-add-item"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', singleFlight(async () => {
       const chainId = btn.dataset.chain;
       const select = container.querySelector(`.chain-add-select[data-chain="${chainId}"]`);
       const itemId = select?.value;
       if (!itemId) return showToast('Select an item', 'error');
-      const chain = await api.signalChains().then(cs => cs.find(c => String(c.id) === String(chainId)));
-      const items = [...(chain?.items || []).map((s, i) => ({ item_id: s.id, position: i })), {
-        item_id: Number(itemId), position: (chain?.items?.length || 0)
-      }];
-      await api.setSignalChainItems(chainId, items);
-      showToast('Added to chain', 'success');
-      state.studioTab = 'chains';
-      navigate('studio-setup');
-    });
+      try {
+        await api.addSignalChainItem(chainId, Number(itemId));
+        showToast('Added to chain', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+        if (err.status !== 409) return;
+      }
+      await showStudioTab('chains');
+    }));
   });
 
   container.querySelectorAll('[data-action="chain-remove-item"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const chainId = btn.dataset.chain;
-      const removeId = Number(btn.dataset.item);
-      const chain = await api.signalChains().then(cs => cs.find(c => String(c.id) === String(chainId)));
-      const items = (chain?.items || []).filter(s => s.id !== removeId).map((s, i) => ({ item_id: s.id, position: i }));
-      await api.setSignalChainItems(chainId, items);
-      navigate('studio-setup');
-    });
+    btn.addEventListener('click', singleFlight(async () => {
+      try {
+        await api.removeSignalChainItem(btn.dataset.chain, Number(btn.dataset.item));
+      } catch (err) {
+        return showToast(err.message, 'error');
+      }
+      await showStudioTab('chains');
+    }));
   });
 
   bindFloorplanEvents(state.floorplans);
@@ -2279,7 +2279,7 @@ async function openWallCutoutForItem(item, { onDone } = {}) {
     onSave: async (patch) => {
       await api.saveWallCutout(full.id, patch);
       if (full.map_placement?.floorplan_id) {
-        await mergePinUpdates(full.map_placement.floorplan_id, [{ item_id: full.id, ...patch }], fp);
+        await mergePinUpdates(full.map_placement.floorplan_id, [{ item_id: full.id, ...patch }]);
         state.floorplans = await api.floorplans();
       }
       onDone?.();
@@ -2316,34 +2316,11 @@ function openFloorplanWallInline(fp, edge, { setupMode = true, onBack } = {}) {
   });
 }
 
-function buildFullFloorplanPins(fp) {
-  return (fp?.items || []).map(p => ({
-    item_id: p.id,
-    x_pct: p.x_pct,
-    y_pct: p.y_pct,
-    placement: p.placement || 'floor',
-    wall_edge: p.wall_edge,
-    wall_t: p.wall_t,
-    height_ft: p.height_ft,
-    icon_mode: p.icon_mode,
-    wall_photo_path: p.wall_photo_path,
-    photo_width_ft: p.photo_width_ft,
-    photo_height_ft: p.photo_height_ft,
-    rotation_deg: p.rotation_deg || 0,
-    photo_calibration: p.photo_calibration,
-    wall_display: p.wall_display !== false
-  }));
-}
-
-async function mergePinUpdates(fpId, updates, fp) {
-  const floorplan = fp || (state.floorplans || []).find(f => String(f.id) === String(fpId));
-  const pins = buildFullFloorplanPins(floorplan);
-  for (const u of updates) {
-    const row = pins.find(p => p.item_id === u.item_id);
-    if (row) Object.assign(row, u);
-    else pins.push({ item_id: u.item_id, x_pct: 50, y_pct: 50, ...u });
-  }
-  await api.setFloorplanItems(fpId, pins);
+/** Save only the pins that changed; pins placed meanwhile on other devices are kept. */
+async function mergePinUpdates(fpId, updates) {
+  const updated = await api.updateFloorplanItems(fpId, { upsert: updates });
+  syncFloorplanInState(updated);
+  return updated;
 }
 
 async function promptWallRehang(item, placement) {

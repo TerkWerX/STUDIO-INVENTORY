@@ -101,7 +101,8 @@ jobs:
             $found = Invoke-RestMethod -Uri "$base/api/items?q=UPD-1"
             if (@($found).Count -ne 1) { throw 'The gear added before the update is gone' }
             if (!(Test-Path (Join-Path $target 'data\logs\studio-inventory.log'))) { throw 'No server log file on Windows' }
-            $left = Get-ChildItem -LiteralPath (Split-Path -Parent $target) -Filter 'studio-inventory-update-test.*'
+            # Not -Filter: Windows wildcards let 'name.*' match 'name' itself (the install).
+            $left = @(Get-ChildItem -LiteralPath (Split-Path -Parent $target) | Where-Object { $_.Name -like 'studio-inventory-update-test.*' })
             if ($left) { throw "The update left folders behind: $($left.Name -join ', ')" }
 
             # "Stop Studio Inventory" (the launcher with --stop) closes the app cleanly.

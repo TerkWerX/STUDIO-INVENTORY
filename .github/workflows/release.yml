@@ -76,7 +76,8 @@ jobs:
           Set-Content -LiteralPath $marker -Value 'keep me'
           Start-Process -FilePath $setup -ArgumentList @('--silent', '--no-start', '--no-shortcuts', '--target', $target) -Wait -NoNewWindow
           if ((Get-Content -LiteralPath $marker) -ne 'keep me') { throw "Updating over an existing install lost data" }
-          if (Get-ChildItem -LiteralPath (Split-Path -Parent $target) -Filter 'studio-inventory-install-test.*') { throw "Update left staging folders behind" }
+          # Not -Filter: Windows wildcards let 'name.*' match 'name' itself (the install).
+          if (Get-ChildItem -LiteralPath (Split-Path -Parent $target) | Where-Object { $_.Name -like 'studio-inventory-install-test.*' }) { throw "Update left staging folders behind" }
 
       - name: Create ZIP
         shell: pwsh

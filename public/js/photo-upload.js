@@ -1,6 +1,8 @@
 const params = new URLSearchParams(window.location.search);
 const itemId = params.get('id');
 const pending = [];
+const previewUrls = new Map(); // File -> object URL, revoked when the file leaves the queue
+let uploading = false;
 
 const itemNameEl = document.getElementById('item-name');
 const authCard = document.getElementById('auth-card');
@@ -34,13 +36,25 @@ function setStatus(msg, type = '') {
   statusEl.className = `status ${type}`.trim();
 }
 
+function previewUrl(file) {
+  if (!previewUrls.has(file)) previewUrls.set(file, URL.createObjectURL(file));
+  return previewUrls.get(file);
+}
+
+function forgetFiles(files) {
+  for (const file of files) {
+    const index = pending.indexOf(file);
+    if (index >= 0) pending.splice(index, 1);
+    const url = previewUrls.get(file);
+    if (url) URL.revokeObjectURL(url);
+    previewUrls.delete(file);
+  }
+}
+
 function refreshPreview() {
-  previewList.innerHTML = pending.map((file, i) => {
-    const url = URL.createObjectURL(file);
-    return `<img src="${url}" alt="Preview ${i + 1}">`;
-  }).join('');
-  uploadBtn.disabled = pending.length === 0;
-  setStatus(pending.length ? `${pending.length} photo(s) ready` : '');
+  previewList.innerHTML = pending.map((file, i) => `<img src="${previewUrl(file)}" alt="Preview ${i + 1}">`).join('');
+  uploadBtn.disabled = uploading || pending.length === 0;
+  if (!uploading) setStatus(pending.length ? `${pending.length} photo(s) ready` : '');
 }
 
 function queueFiles(fileList) {
@@ -88,12 +102,15 @@ async function unlockWithPin(pin) {
 }
 
 async function uploadPhotos() {
-  if (!pending.length) return;
+  if (!pending.length || uploading) return;
+  uploading = true;
   uploadBtn.disabled = true;
   setStatus('Uploading…');
 
+  // Photos taken while this upload runs stay queued for the next one.
+  const batch = [...pending];
   const fd = new FormData();
-  for (const file of pending) fd.append('files', file);
+  for (const file of batch) fd.append('files', file);
 
   try {
     const res = await fetch(`/api/items/${encodeURIComponent(itemId)}/photos`, { method: 'POST', body: fd });
@@ -103,14 +120,23 @@ async function uploadPhotos() {
       throw new Error(err.error || 'Upload failed');
     }
     const created = await res.json();
+    forgetFiles(batch);
+    uploading = false;
+    if (pending.length) {
+      refreshPreview();
+      setStatus(`${created.length} uploaded. ${pending.length} more photo(s) ready.`, 'success');
+      return;
+    }
     uploadCard.classList.add('hidden');
     doneCard.classList.remove('hidden');
     document.getElementById('done-message').textContent =
       `${created.length} photo${created.length !== 1 ? 's' : ''} added to ${itemNameEl.textContent}.`;
-    pending.length = 0;
+    refreshPreview();
   } catch (err) {
-    setStatus(err.message, 'error');
-    uploadBtn.disabled = false;
+    uploading = false;
+    const message = err instanceof TypeError ? 'Could not reach the studio computer. Check the Wi-Fi and try again.' : err.message;
+    refreshPreview();
+    setStatus(message, 'error');
   }
 }
 

@@ -7,8 +7,18 @@ export const STUDIO_STATUS_LABELS = {
   loaned: 'Loaned out',
   in_repair: 'In repair',
   storage: 'In storage',
-  away: 'Away'
+  away: 'Away',
+  sold: 'Sold',
+  stolen: 'Stolen',
+  destroyed: 'Destroyed',
+  given_away: 'Given away'
 };
+
+export const FORMER_STATUSES = ['sold', 'stolen', 'destroyed', 'given_away'];
+
+export function isFormerStatus(status) {
+  return FORMER_STATUSES.includes(status);
+}
 
 export function renderCompletenessBadge(completeness, { compact = false } = {}) {
   if (!completeness) return '';
@@ -48,7 +58,7 @@ export function renderStudioStatusBadge(item) {
   if (status === 'in_studio') return '';
   const label = STUDIO_STATUS_LABELS[status] || status;
   const note = item.studio_status_note ? ` — ${escapeHtml(item.studio_status_note)}` : '';
-  return `<span class="studio-status-badge status-${status}">${escapeHtml(label)}${note}</span>`;
+  return `<span class="studio-status-badge status-${escapeHtml(status)}">${escapeHtml(label)}${note}</span>`;
 }
 
 export const MAINTENANCE_TYPES = {

@@ -1,4 +1,4 @@
-import { escapeHtml } from '../utils.js';
+import { escapeHtml, singleFlight } from '../utils.js';
 import { LABEL_SIZES, loadLabelSettings, saveLabelSettings, getScanUrl } from '../lib/label-settings.js';
 import { getDymoStatus, printOwnerLabel, renderLabelPreview, printLabelFallback } from '../lib/dymo-labels.js';
 
@@ -164,8 +164,9 @@ export function bindLabelsPageEvents({ items, onToast, onRefreshStatus, onGetSca
     if (printed) onToast(`Printed ${printed} label${printed !== 1 ? 's' : ''}`, 'success');
   };
 
-  document.querySelector('[data-action="label-print-selected"]')?.addEventListener('click', () => printBatch(true));
-  document.querySelector('[data-action="label-print-fallback"]')?.addEventListener('click', () => printBatch(false));
+  // One batch at a time: a double click must not print every label twice.
+  document.querySelector('[data-action="label-print-selected"]')?.addEventListener('click', singleFlight(() => printBatch(true)));
+  document.querySelector('[data-action="label-print-fallback"]')?.addEventListener('click', singleFlight(() => printBatch(false)));
 
   document.querySelectorAll('[data-action="label-preview-one"]').forEach(btn => {
     btn.addEventListener('click', async () => {

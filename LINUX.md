@@ -69,4 +69,4 @@ npm install
 npm start
 ```
 
-Node.js 18 or newer is required for a developer installation.
+Node.js 22 or newer is required for a developer installation.

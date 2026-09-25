@@ -53,7 +53,7 @@ function renderItem(item) {
           ${item.serial_number ? `<div><dt>Serial</dt><dd>${escapeHtml(item.serial_number)}</dd></div>` : ''}
           <div><dt>Location</dt><dd>${escapeHtml(item.location) || '—'}</dd></div>
           <div><dt>Category</dt><dd>${escapeHtml(item.category)}</dd></div>
-          <div><dt>Condition</dt><dd><span class="condition-badge condition-${item.condition}">${item.condition}</span></dd></div>
+          <div><dt>Condition</dt><dd><span class="condition-badge condition-${escapeHtml(item.condition)}">${escapeHtml(item.condition)}</span></dd></div>
           <div><dt>Replacement</dt><dd class="value-cell">${formatCurrency(item.replacement_value * (item.quantity || 1))}</dd></div>
           ${item.requires_power ? `<div><dt>Power</dt><dd>${escapeHtml([item.power_adapter_voltage, item.power_adapter_current, item.power_adapter_polarity].filter(Boolean).join(' · ') || 'Required')}</dd></div>` : ''}
           ${item.purchase_date ? `<div><dt>Purchased</dt><dd>${formatDate(item.purchase_date)}</dd></div>` : ''}

@@ -1,4 +1,4 @@
-import { escapeHtml } from '../utils.js';
+import { escapeHtml, singleFlight } from '../utils.js';
 import { api } from '../api.js';
 import {
   formatLengthInput, lengthStep, lengthUnitLabel, lengthUnitOptions,
@@ -134,8 +134,15 @@ export function openWallPhotoEditor({ item, pin, unit = 'ft', mode = 'placement'
 
   async function loadFile(file) {
     const url = URL.createObjectURL(file);
-    const img = await loadImage(url);
-    URL.revokeObjectURL(url);
+    let img;
+    try {
+      img = await loadImage(url);
+    } catch {
+      onToast?.('That photo could not be opened. Use a JPEG or PNG (iPhone: Settings → Camera → Formats → Most Compatible).', 'error');
+      return;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
     editor.sourceImage = img;
     resetCrop();
     editor.calPoints = [];
@@ -235,7 +242,7 @@ export function openWallPhotoEditor({ item, pin, unit = 'ft', mode = 'placement'
     e.target.value = formatLengthInput(editor.photoHeightFt, scaleUnit);
   });
 
-  overlay.querySelector('#wp-save')?.addEventListener('click', async () => {
+  overlay.querySelector('#wp-save')?.addEventListener('click', singleFlight(async () => {
     try {
       const blob = await renderProcessedBlob();
       if (!blob) throw new Error('Add and process a photo first');
@@ -262,10 +269,11 @@ export function openWallPhotoEditor({ item, pin, unit = 'ft', mode = 'placement'
     } catch (err) {
       onToast?.(err.message, 'error');
     }
-  });
+  }));
 
   overlay.querySelectorAll('.wall-photo-close').forEach(btn => btn.addEventListener('click', close));
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  // Assigned, not added: the overlay is reused, and each open replaces the previous handler.
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
 
   function close() {
     overlay.classList.add('hidden');
@@ -575,7 +583,7 @@ function loadImage(src) {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
-    img.onerror = reject;
+    img.onerror = () => reject(new Error('Image could not be loaded'));
     img.src = src;
   });
 }

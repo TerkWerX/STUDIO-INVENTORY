@@ -74,7 +74,7 @@ Pre-built releases include the runtime and production dependencies—no separate
 | Platform | Recommended download | Start here |
 |---|---|---|
 | **Windows** | `Windows-Setup.exe` | Run setup, then launch **Studio Inventory** |
-| **macOS** | `.dmg` | Open the image and run the installer; Control-click → **Open** if Gatekeeper warns |
+| **macOS** | `.dmg` | Open the image and run the installer; if macOS blocks it, see [allowing it once](MAC.md#if-macos-blocks-it-the-first-time) |
 | **Linux x64** | `.tar.gz` | Extract and run `Install Studio Inventory.sh` |
 | **Portable use** | Platform ZIP | Extract and use the included launcher |
 
@@ -94,7 +94,7 @@ Platform guides: **[macOS](MAC.md)** · **[Linux](LINUX.md)** · **[Wiki install
 Android Chrome/Edge and iPhone/iPad Safari support inventory editing and photo capture. Live barcode video requires HTTPS; the regular LAN address provides **Take a Label Photo** and signed QR links instead.
 
 > [!IMPORTANT]
-> Do not forward port `3847` to the internet. Normal LAN HTTP traffic is not encrypted. Use trusted WPA2/WPA3 Wi-Fi, HTTPS, or a VPN.
+> Do not forward port `3847` to the internet. Normal LAN HTTP traffic is not encrypted. Use trusted WPA2/WPA3 Wi-Fi, HTTPS, or a VPN. Behind an HTTPS proxy with its own host name, add that name to `STUDIO_ALLOWED_HOSTS` (see [SECURITY.md](SECURITY.md)).
 
 ## Your data stays understandable
 
@@ -109,7 +109,7 @@ The app supports Full Backup ZIP, JSON, SQL, CSV, and PDF exports. Full Backup Z
 
 ## Run from source
 
-Requires [Node.js](https://nodejs.org/) 18 or newer.
+Requires [Node.js](https://nodejs.org/) 22 or newer.
 
 ```bash
 git clone https://github.com/TerkWerX/STUDIO-INVENTORY.git

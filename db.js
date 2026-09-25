@@ -1,6 +1,6 @@
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { openInventoryDatabase } = require('./lib/open-database');
 const { computeItemCompleteness } = require('./lib/completeness');
 const {
   profileById,
@@ -25,9 +25,42 @@ for (const dir of [DATA_DIR, UPLOADS_DIR, path.join(UPLOADS_DIR, 'photos'),
 
 const LOGOS_DIR = path.join(UPLOADS_DIR, 'logos');
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+/**
+ * Record IDs become folder names under uploads/. Accept only positive integers
+ * so a crafted ID such as "../../x" can never point outside the data folder.
+ */
+function safeRecordId(id) {
+  const text = String(id ?? '').trim();
+  if (!/^[1-9]\d{0,15}$/.test(text)) {
+    const err = new Error('Invalid record id');
+    err.status = 400;
+    throw err;
+  }
+  return text;
+}
+
+/** Absolute path for a stored upload path, or '' when it would leave uploads/. */
+function resolveUploadPath(relativePath) {
+  const rel = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!rel || rel.split('/').some(part => part === '..')) return '';
+  const root = path.resolve(UPLOADS_DIR);
+  const full = path.resolve(root, rel);
+  return full.startsWith(root + path.sep) ? full : '';
+}
+
+function removeUploadFile(relativePath) {
+  const full = resolveUploadPath(relativePath);
+  if (full && fs.existsSync(full) && fs.statSync(full).isFile()) fs.unlinkSync(full);
+}
+
+let db = null;
+let catalogLock = null;
+try {
+  db = openInventoryDatabase(DB_PATH);
+} catch (err) {
+  if (err.code !== 'CATALOG_LOCKED') throw err;
+  catalogLock = err.message;
+}
 
 const DEFAULT_CATEGORIES = [
   'Guitar', 'Bass', 'Keyboard', 'Brass Instrument', 'Bowed String Instrument',
@@ -52,6 +85,10 @@ const ACTIVATION_METHODS = ['account', 'ilok', 'ilok_cloud', 'challenge', 'machi
 const PLUGIN_FORMATS = ['vst3', 'au', 'aax', 'standalone', 'multiple', 'other'];
 
 function runMigrations() {
+  db.transaction(migrateSchema)();
+}
+
+function migrateSchema() {
   const itemCols = db.prepare('PRAGMA table_info(items)').all().map(c => c.name);
   if (!itemCols.includes('update_checks_enabled')) {
     db.exec('ALTER TABLE items ADD COLUMN update_checks_enabled INTEGER NOT NULL DEFAULT 1');
@@ -68,6 +105,39 @@ function runMigrations() {
   if (!itemCols.includes('studio_status_note')) {
     db.exec("ALTER TABLE items ADD COLUMN studio_status_note TEXT DEFAULT ''");
   }
+  if (!itemCols.includes('disposition_date')) {
+    db.exec("ALTER TABLE items ADD COLUMN disposition_date TEXT DEFAULT ''");
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS item_value_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      note TEXT DEFAULT '',
+      recorded_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_value_events_item ON item_value_events(item_id, recorded_at);
+    CREATE TABLE IF NOT EXISTS item_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL,
+      field TEXT NOT NULL,
+      old_value TEXT DEFAULT '',
+      new_value TEXT DEFAULT '',
+      recorded_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_item_audit_item ON item_audit(item_id, recorded_at);
+    CREATE TABLE IF NOT EXISTS studio_secrets (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      guest_token TEXT DEFAULT '',
+      scan_link_secret TEXT DEFAULT '',
+      owner_pin_hash TEXT DEFAULT '',
+      owner_pin_salt TEXT DEFAULT '',
+      owner_session_token TEXT DEFAULT '',
+      owner_session_tokens TEXT DEFAULT '[]'
+    );
+  `);
   if (!itemCols.includes('value_updated_at')) {
     db.exec('ALTER TABLE items ADD COLUMN value_updated_at TEXT DEFAULT NULL');
     db.exec(`UPDATE items SET value_updated_at = updated_at WHERE replacement_value > 0 AND value_updated_at IS NULL`);
@@ -107,50 +177,6 @@ function runMigrations() {
   const attCols2 = db.prepare('PRAGMA table_info(attachments)').all().map(c => c.name);
   if (!attCols2.includes('extracted_text')) {
     db.exec("ALTER TABLE attachments ADD COLUMN extracted_text TEXT DEFAULT ''");
-  }
-
-  const fpCols = db.prepare('PRAGMA table_info(floorplans)').all().map(c => c.name);
-  if (fpCols.length && !fpCols.includes('map_mode')) {
-    db.exec("ALTER TABLE floorplans ADD COLUMN map_mode TEXT NOT NULL DEFAULT 'draw'");
-    db.exec("ALTER TABLE floorplans ADD COLUMN polygon_json TEXT DEFAULT ''");
-    db.exec("ALTER TABLE floorplans ADD COLUMN unit TEXT NOT NULL DEFAULT 'ft'");
-    db.exec("ALTER TABLE floorplans ADD COLUMN bounds_width REAL DEFAULT 0");
-    db.exec("ALTER TABLE floorplans ADD COLUMN bounds_depth REAL DEFAULT 0");
-    db.exec("ALTER TABLE floorplans ADD COLUMN wall_lengths_json TEXT DEFAULT ''");
-    db.exec(`UPDATE floorplans SET map_mode = 'photo' WHERE image_path IS NOT NULL AND image_path != ''`);
-  }
-
-  const fpiCols = db.prepare('PRAGMA table_info(floorplan_items)').all().map(c => c.name);
-  if (fpiCols.length && !fpiCols.includes('placement')) {
-    db.exec("ALTER TABLE floorplan_items ADD COLUMN placement TEXT NOT NULL DEFAULT 'floor'");
-    db.exec('ALTER TABLE floorplan_items ADD COLUMN wall_edge INTEGER DEFAULT NULL');
-    db.exec('ALTER TABLE floorplan_items ADD COLUMN wall_t REAL DEFAULT NULL');
-  }
-  if (fpCols.length && !fpCols.includes('ceiling_height')) {
-    db.exec('ALTER TABLE floorplans ADD COLUMN ceiling_height REAL NOT NULL DEFAULT 9.5');
-  }
-  if (fpiCols.length && !fpiCols.includes('height_ft')) {
-    db.exec('ALTER TABLE floorplan_items ADD COLUMN height_ft REAL DEFAULT NULL');
-    db.exec("ALTER TABLE floorplan_items ADD COLUMN icon_mode TEXT NOT NULL DEFAULT 'logo'");
-    db.exec("ALTER TABLE floorplan_items ADD COLUMN wall_photo_path TEXT DEFAULT ''");
-    db.exec('ALTER TABLE floorplan_items ADD COLUMN photo_width_ft REAL DEFAULT 0');
-    db.exec('ALTER TABLE floorplan_items ADD COLUMN photo_height_ft REAL DEFAULT 0');
-    db.exec("ALTER TABLE floorplan_items ADD COLUMN photo_calibration_json TEXT DEFAULT '{}'");
-  }
-  if (fpCols.length && !fpCols.includes('wall_photos_json')) {
-    db.exec("ALTER TABLE floorplans ADD COLUMN wall_photos_json TEXT NOT NULL DEFAULT '{}'");
-  }
-  if (fpCols.length && !fpCols.includes('floor_image_scale')) {
-    db.exec('ALTER TABLE floorplans ADD COLUMN floor_image_scale REAL NOT NULL DEFAULT 1');
-    db.exec('ALTER TABLE floorplans ADD COLUMN floor_image_x REAL NOT NULL DEFAULT 0.5');
-    db.exec('ALTER TABLE floorplans ADD COLUMN floor_image_y REAL NOT NULL DEFAULT 0.5');
-    db.exec("ALTER TABLE floorplans ADD COLUMN floor_image_fit TEXT NOT NULL DEFAULT 'cover'");
-  }
-  if (fpiCols.length && !fpiCols.includes('wall_display')) {
-    db.exec('ALTER TABLE floorplan_items ADD COLUMN wall_display INTEGER NOT NULL DEFAULT 1');
-  }
-  if (fpiCols.length && !fpiCols.includes('rotation_deg')) {
-    db.exec('ALTER TABLE floorplan_items ADD COLUMN rotation_deg REAL DEFAULT 0');
   }
 
   db.exec(`
@@ -280,6 +306,53 @@ function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_software_renewal ON software_licenses(renewal_date);
   `);
 
+  // Column upgrades for the floorplan tables run after the tables exist, so a
+  // brand-new catalog gets every column on its first start.
+  const fpCols = db.prepare('PRAGMA table_info(floorplans)').all().map(c => c.name);
+  if (fpCols.length && !fpCols.includes('map_mode')) {
+    db.exec("ALTER TABLE floorplans ADD COLUMN map_mode TEXT NOT NULL DEFAULT 'draw'");
+    db.exec("ALTER TABLE floorplans ADD COLUMN polygon_json TEXT DEFAULT ''");
+    db.exec("ALTER TABLE floorplans ADD COLUMN unit TEXT NOT NULL DEFAULT 'ft'");
+    db.exec("ALTER TABLE floorplans ADD COLUMN bounds_width REAL DEFAULT 0");
+    db.exec("ALTER TABLE floorplans ADD COLUMN bounds_depth REAL DEFAULT 0");
+    db.exec("ALTER TABLE floorplans ADD COLUMN wall_lengths_json TEXT DEFAULT ''");
+    db.exec(`UPDATE floorplans SET map_mode = 'photo' WHERE image_path IS NOT NULL AND image_path != ''`);
+  }
+
+  const fpiCols = db.prepare('PRAGMA table_info(floorplan_items)').all().map(c => c.name);
+  if (fpiCols.length && !fpiCols.includes('placement')) {
+    db.exec("ALTER TABLE floorplan_items ADD COLUMN placement TEXT NOT NULL DEFAULT 'floor'");
+    db.exec('ALTER TABLE floorplan_items ADD COLUMN wall_edge INTEGER DEFAULT NULL');
+    db.exec('ALTER TABLE floorplan_items ADD COLUMN wall_t REAL DEFAULT NULL');
+  }
+  if (fpCols.length && !fpCols.includes('ceiling_height')) {
+    db.exec('ALTER TABLE floorplans ADD COLUMN ceiling_height REAL NOT NULL DEFAULT 9.5');
+  }
+  if (fpiCols.length && !fpiCols.includes('height_ft')) {
+    db.exec('ALTER TABLE floorplan_items ADD COLUMN height_ft REAL DEFAULT NULL');
+    db.exec("ALTER TABLE floorplan_items ADD COLUMN icon_mode TEXT NOT NULL DEFAULT 'logo'");
+    db.exec("ALTER TABLE floorplan_items ADD COLUMN wall_photo_path TEXT DEFAULT ''");
+    db.exec('ALTER TABLE floorplan_items ADD COLUMN photo_width_ft REAL DEFAULT 0');
+    db.exec('ALTER TABLE floorplan_items ADD COLUMN photo_height_ft REAL DEFAULT 0');
+    db.exec("ALTER TABLE floorplan_items ADD COLUMN photo_calibration_json TEXT DEFAULT '{}'");
+  }
+  if (fpCols.length && !fpCols.includes('wall_photos_json')) {
+    db.exec("ALTER TABLE floorplans ADD COLUMN wall_photos_json TEXT NOT NULL DEFAULT '{}'");
+  }
+  if (fpCols.length && !fpCols.includes('floor_image_scale')) {
+    db.exec('ALTER TABLE floorplans ADD COLUMN floor_image_scale REAL NOT NULL DEFAULT 1');
+    db.exec('ALTER TABLE floorplans ADD COLUMN floor_image_x REAL NOT NULL DEFAULT 0.5');
+    db.exec('ALTER TABLE floorplans ADD COLUMN floor_image_y REAL NOT NULL DEFAULT 0.5');
+    db.exec("ALTER TABLE floorplans ADD COLUMN floor_image_fit TEXT NOT NULL DEFAULT 'cover'");
+  }
+  if (fpiCols.length && !fpiCols.includes('wall_display')) {
+    db.exec('ALTER TABLE floorplan_items ADD COLUMN wall_display INTEGER NOT NULL DEFAULT 1');
+  }
+  if (fpiCols.length && !fpiCols.includes('rotation_deg')) {
+    db.exec('ALTER TABLE floorplan_items ADD COLUMN rotation_deg REAL DEFAULT 0');
+  }
+
+
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS manual_fts USING fts5(
       attachment_id UNINDEXED,
@@ -387,6 +460,29 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_brands_name ON brands(name);
   `);
   runMigrations();
+  backfillOpeningValues();
+}
+
+function backfillOpeningValues() {
+  const rows = db.prepare(`
+    SELECT id, replacement_value, value_updated_at
+    FROM items
+    WHERE replacement_value > 0
+      AND NOT EXISTS (SELECT 1 FROM item_value_events e WHERE e.item_id = items.id)
+  `).all();
+  if (!rows.length) return 0;
+  const insert = db.prepare(`
+    INSERT INTO item_value_events (item_id, amount, note, recorded_at)
+    VALUES (?, ?, 'Opening snapshot', ?)
+  `);
+  const now = new Date().toISOString();
+  db.transaction((list) => {
+    for (const row of list) {
+      const text = String(row.value_updated_at || '').trim();
+      insert.run(row.id, row.replacement_value, /^\d{4}-\d{2}-\d{2}/.test(text) ? text : now);
+    }
+  })(rows);
+  return rows.length;
 }
 
 function ensureBrand(brandName) {
@@ -427,7 +523,7 @@ function getAttachmentsForItem(itemId) {
   return db.prepare(`
     SELECT id, filename, original_name, relative_path, mime_type, type,
            version, description, source_url, metadata, created_at
-    FROM attachments WHERE item_id = ? ORDER BY type, created_at DESC
+    FROM attachments WHERE item_id = ? ORDER BY type, created_at DESC, id
   `).all(itemId).map(a => ({
     ...a,
     metadata: safeJsonParse(a.metadata)
@@ -496,50 +592,160 @@ function clearItemWallCutout(itemId) {
 
 function enrichItem(item) {
   if (!item) return null;
-  const attachments = getAttachmentsForItem(item.id);
-  let brand_logo_path = '';
-  if (item.brand) {
-    const brandRow = db.prepare('SELECT logo_path FROM brands WHERE name = ? COLLATE NOCASE').get(item.brand);
-    brand_logo_path = brandRow?.logo_path || '';
+  return enrichItems([item])[0];
+}
+
+const cachedStatements = new Map();
+function cachedStatement(sql) {
+  let stmt = cachedStatements.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    cachedStatements.set(sql, stmt);
   }
-  return {
-    ...item,
-    ...itemInstrumentData(item),
-    brand_logo_path,
-    update_checks_enabled: item.update_checks_enabled !== 0,
-    requires_power: item.requires_power !== 0,
-    tags: getTagsForItem(item.id),
-    attachments,
-    photos: attachments.filter(a => a.type === 'photo'),
-    manuals: attachments.filter(a => a.type === 'manual' || a.type === 'document'),
-    software: attachments.filter(a => a.type === 'software'),
-    receipts: attachments.filter(a => a.type === 'receipt'),
-    maintenance: getMaintenanceForItem(item.id),
-    loans: getLoansForItem(item.id),
-    activeLoan: enrichLoanRow(getActiveLoanForItem(item.id)),
-    parent: getParentSummary(item.parent_item_id),
-    accessories: getAccessoryItems(item.id).map(child => {
-      const att = getAttachmentsForItem(child.id);
-      return {
-        ...child,
-        ...itemInstrumentData(child),
-        on_insurance_policy: child.on_insurance_policy !== 0,
-        update_checks_enabled: child.update_checks_enabled !== 0,
-        requires_power: child.requires_power !== 0,
-        photos: att.filter(a => a.type === 'photo'),
-        tags: getTagsForItem(child.id)
-      };
-    }),
-    on_insurance_policy: item.on_insurance_policy !== 0,
-    completeness: computeItemCompleteness({
+  return stmt;
+}
+
+function groupRows(rows, key = 'item_id') {
+  const groups = new Map();
+  for (const row of rows) {
+    const id = row[key];
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(row);
+  }
+  return groups;
+}
+
+/** SQLite's NOCASE collation folds only ASCII letters. */
+function nocaseKey(value) {
+  return String(value).replace(/[A-Z]+/g, letters => letters.toLowerCase());
+}
+
+/**
+ * Enrich many items with a fixed number of queries (about ten, however many
+ * items there are) instead of a dozen queries per item. Each result is the
+ * same as the one-item-at-a-time version produced; the item-list, dashboard,
+ * guest and export endpoints depend on that.
+ */
+function enrichItems(items) {
+  const list = (items || []).filter(Boolean);
+  if (!list.length) return [];
+  const idsJson = JSON.stringify(list.map(item => item.id));
+  const inList = 'SELECT value FROM json_each(?)';
+
+  const childrenByParent = groupRows(cachedStatement(
+    `SELECT * FROM items WHERE parent_item_id IN (${inList}) ORDER BY name, id`
+  ).all(idsJson), 'parent_item_id');
+  const withChildren = new Set(list.map(item => item.id));
+  for (const rows of childrenByParent.values()) for (const child of rows) withChildren.add(child.id);
+  const allIdsJson = JSON.stringify([...withChildren]);
+
+  const attachmentsByItem = new Map();
+  for (const { item_id, ...attachment } of cachedStatement(`
+    SELECT item_id, id, filename, original_name, relative_path, mime_type, type,
+           version, description, source_url, metadata, created_at
+    FROM attachments WHERE item_id IN (${inList}) ORDER BY type, created_at DESC, id
+  `).all(allIdsJson)) {
+    if (!attachmentsByItem.has(item_id)) attachmentsByItem.set(item_id, []);
+    attachmentsByItem.get(item_id).push({ ...attachment, metadata: safeJsonParse(attachment.metadata) });
+  }
+
+  const tagsByItem = new Map();
+  for (const { item_id, ...tag } of cachedStatement(`
+    SELECT it.item_id, t.id, t.name FROM tags t
+    JOIN item_tags it ON it.tag_id = t.id
+    WHERE it.item_id IN (${inList})
+    ORDER BY t.name
+  `).all(allIdsJson)) {
+    if (!tagsByItem.has(item_id)) tagsByItem.set(item_id, []);
+    tagsByItem.get(item_id).push(tag);
+  }
+
+  const maintenanceByItem = groupRows(cachedStatement(`
+    SELECT id, item_id, service_date, service_type, note, created_at
+    FROM maintenance_log WHERE item_id IN (${inList}) ORDER BY service_date DESC, id DESC
+  `).all(idsJson));
+
+  const loansByItem = groupRows(cachedStatement(`
+    SELECT id, item_id, borrower_name, borrower_contact, loaned_at, due_date,
+      returned_at, note, condition_out, condition_in, created_at
+    FROM loan_log WHERE item_id IN (${inList}) ORDER BY loaned_at DESC, id DESC
+  `).all(idsJson));
+
+  const latestValueByItem = new Map();
+  for (const { item_id, ...event } of cachedStatement(`
+    SELECT item_id, amount, note, recorded_at FROM item_value_events
+    WHERE item_id IN (${inList}) ORDER BY recorded_at DESC, id DESC
+  `).all(idsJson)) {
+    if (!latestValueByItem.has(item_id)) latestValueByItem.set(item_id, event);
+  }
+
+  const parentIds = [...new Set(list.map(item => item.parent_item_id).filter(Boolean))];
+  const parents = new Map(parentIds.length
+    ? cachedStatement(`SELECT id, name, common_name FROM items WHERE id IN (${inList})`)
+      .all(JSON.stringify(parentIds)).map(row => [row.id, row])
+    : []);
+
+  const logoByBrand = new Map();
+  for (const brand of cachedStatement('SELECT name, logo_path FROM brands ORDER BY id').all()) {
+    const key = nocaseKey(brand.name);
+    if (!logoByBrand.has(key)) logoByBrand.set(key, brand.logo_path);
+  }
+
+  const placementByItem = new Map();
+  for (const row of cachedStatement(`${MAP_PLACEMENT_SQL} WHERE fi.item_id IN (${inList}) ORDER BY fi.item_id, fi.floorplan_id`).all(idsJson)) {
+    if (!placementByItem.has(row.item_id)) placementByItem.set(row.item_id, mapPlacementFromRow(row));
+  }
+
+  return list.map(item => {
+    const attachments = attachmentsByItem.get(item.id) || [];
+    const loans = loansByItem.get(item.id) || [];
+    let activeLoan = null;
+    for (const loan of loans) {
+      if (loan.returned_at === null && (!activeLoan || loan.id > activeLoan.id)) activeLoan = loan;
+    }
+    const brand_logo_path = item.brand ? (logoByBrand.get(nocaseKey(item.brand)) || '') : '';
+    const photos = attachments.filter(a => a.type === 'photo');
+    const manuals = attachments.filter(a => a.type === 'manual' || a.type === 'document');
+    const receipts = attachments.filter(a => a.type === 'receipt');
+    const enriched = {
       ...item,
-      photos: attachments.filter(a => a.type === 'photo'),
-      manuals: attachments.filter(a => a.type === 'manual' || a.type === 'document'),
-      receipts: attachments.filter(a => a.type === 'receipt')
-    }),
-    map_placement: getItemMapPlacement(item.id),
-    wall_cutout: parseItemWallCutout(item)
-  };
+      ...itemInstrumentData(item),
+      brand_logo_path,
+      update_checks_enabled: item.update_checks_enabled !== 0,
+      requires_power: item.requires_power !== 0,
+      tags: tagsByItem.get(item.id) || [],
+      attachments,
+      photos,
+      manuals,
+      software: attachments.filter(a => a.type === 'software'),
+      receipts,
+      maintenance: maintenanceByItem.get(item.id) || [],
+      loans,
+      activeLoan: enrichLoanRow(activeLoan),
+      latest_value_event: latestValueByItem.get(item.id) || null,
+      parent: item.parent_item_id ? (parents.get(item.parent_item_id) || null) : null,
+      accessories: (childrenByParent.get(item.id) || []).map(child => {
+        const att = attachmentsByItem.get(child.id) || [];
+        return {
+          ...child,
+          ...itemInstrumentData(child),
+          on_insurance_policy: child.on_insurance_policy !== 0,
+          update_checks_enabled: child.update_checks_enabled !== 0,
+          requires_power: child.requires_power !== 0,
+          photos: att.filter(a => a.type === 'photo'),
+          tags: tagsByItem.get(child.id) || []
+        };
+      }),
+      on_insurance_policy: item.on_insurance_policy !== 0,
+      completeness: null, // filled in below; keeps its place in the JSON
+      map_placement: placementByItem.get(item.id) || null,
+      wall_cutout: parseItemWallCutout(item)
+    };
+    // Completeness reads only the serial number, value dates and the photo,
+    // manual and receipt lists, which the enriched item carries unchanged.
+    enriched.completeness = computeItemCompleteness(enriched);
+    return enriched;
+  });
 }
 
 function setItemTags(itemId, tagNames) {
@@ -557,11 +763,117 @@ function setItemTags(itemId, tagNames) {
   }
 }
 
+const FORMER_STATUSES = ['sold', 'stolen', 'destroyed', 'given_away'];
+const ACTIVE_STATUSES = ['in_studio', 'loaned', 'in_repair', 'storage', 'away'];
+
+function isFormerStatus(status) {
+  return FORMER_STATUSES.includes(status);
+}
+
+function ownedStatusSql(column = 'studio_status') {
+  return `${column} NOT IN ('sold','stolen','destroyed','given_away')`;
+}
+
+const AUDIT_FIELDS = ['serial_number', 'purchase_price', 'replacement_value', 'quantity', 'studio_status'];
+
+function valuesDiffer(field, before, after) {
+  if (['purchase_price', 'replacement_value', 'quantity'].includes(field)) {
+    return Number(before || 0) !== Number(after || 0);
+  }
+  return String(before ?? '') !== String(after ?? '');
+}
+
+function recordAuditChange(itemId, field, oldValue, newValue) {
+  db.prepare(`
+    INSERT INTO item_audit (item_id, field, old_value, new_value, recorded_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(itemId, field, String(oldValue ?? ''), String(newValue ?? ''), new Date().toISOString());
+}
+
+function recordItemChanges(itemId, before, after) {
+  if (!before || !after) return;
+  for (const field of AUDIT_FIELDS) {
+    if (valuesDiffer(field, before[field], after[field])) {
+      recordAuditChange(itemId, field, before[field], after[field]);
+    }
+  }
+}
+
+function recordReplacementValue(itemId, amount, note) {
+  db.prepare(`
+    INSERT INTO item_value_events (item_id, amount, note, recorded_at)
+    VALUES (?, ?, ?, ?)
+  `).run(itemId, Number(amount) || 0, String(note || ''), new Date().toISOString());
+}
+
+function getValueEvents(itemId) {
+  return db.prepare(`
+    SELECT id, item_id, amount, note, recorded_at
+    FROM item_value_events WHERE item_id = ?
+    ORDER BY recorded_at DESC, id DESC
+  `).all(itemId);
+}
+
+function getItemAudit(itemId) {
+  return db.prepare(`
+    SELECT id, item_id, field, old_value, new_value, recorded_at
+    FROM item_audit WHERE item_id = ?
+    ORDER BY recorded_at DESC, id DESC
+  `).all(itemId);
+}
+
+function cascadeFormerStatus(parentId, status, note, date) {
+  const children = db.prepare(
+    'SELECT id, studio_status FROM items WHERE parent_item_id = ?'
+  ).all(parentId);
+  const update = db.prepare(`
+    UPDATE items
+    SET studio_status = ?, studio_status_note = ?, disposition_date = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `);
+  for (const child of children) {
+    if (isFormerStatus(child.studio_status)) continue;
+    recordAuditChange(child.id, 'studio_status', child.studio_status, status);
+    update.run(status, note, date, child.id);
+    cascadeFormerStatus(child.id, status, note, date);
+  }
+}
+
+function restoreCascadedChildren(parentId, previous) {
+  const children = db.prepare(`
+    SELECT id, studio_status, studio_status_note, disposition_date
+    FROM items WHERE parent_item_id = ?
+  `).all(parentId);
+  const update = db.prepare(`
+    UPDATE items
+    SET studio_status = ?, studio_status_note = '', disposition_date = '', updated_at = datetime('now')
+    WHERE id = ?
+  `);
+  const priorStatus = db.prepare(`
+    SELECT old_value FROM item_audit
+    WHERE item_id = ? AND field = 'studio_status' AND new_value = ?
+    ORDER BY recorded_at DESC, id DESC LIMIT 1
+  `);
+  for (const child of children) {
+    if (child.studio_status !== previous.studio_status) continue;
+    if ((child.disposition_date || '') !== (previous.disposition_date || '')) continue;
+    if ((child.studio_status_note || '') !== (previous.studio_status_note || '')) continue;
+    const prior = priorStatus.get(child.id, previous.studio_status);
+    const nextStatus = prior && !isFormerStatus(prior.old_value) ? prior.old_value : 'in_studio';
+    recordAuditChange(child.id, 'studio_status', child.studio_status, nextStatus);
+    update.run(nextStatus, child.id);
+    restoreCascadedChildren(child.id, previous);
+  }
+}
+
+// Largest price or value accepted for one record (well past any real gear).
+const MAX_MONEY = 1e9;
+
 function sanitizeItemInput(body) {
   const str = (v, max = 2000) => String(v ?? '').trim().slice(0, max);
   const num = (v) => {
     const n = parseFloat(v);
-    return isNaN(n) ? 0 : Math.max(0, n);
+    return Number.isFinite(n) ? Math.min(Math.max(0, n), MAX_MONEY) : 0;
   };
   const qty = (v) => {
     const n = parseInt(v, 10);
@@ -570,8 +882,17 @@ function sanitizeItemInput(body) {
   const conditions = ['New', 'Excellent', 'Good', 'Fair', 'Poor'];
   const condition = conditions.includes(body.condition) ? body.condition : 'Good';
   const updateChecks = body.update_checks_enabled === false || body.update_checks_enabled === 0 || body.update_checks_enabled === '0' ? 0 : 1;
-  const statuses = ['in_studio', 'loaned', 'in_repair', 'storage', 'away'];
+  const statuses = [...ACTIVE_STATUSES, ...FORMER_STATUSES];
   const studio_status = statuses.includes(body.studio_status) ? body.studio_status : 'in_studio';
+  const disposition_date = isFormerStatus(studio_status) ? str(body.disposition_date, 20) : '';
+  if (isFormerStatus(studio_status)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(disposition_date)) {
+      throw new Error('A date is required when gear is sold, stolen, destroyed, or given away');
+    }
+    if (!str(body.studio_status_note, 500)) {
+      throw new Error('A short note is required when gear leaves the collection');
+    }
+  }
   const parentId = body.parent_item_id != null && body.parent_item_id !== ''
     ? parseInt(body.parent_item_id, 10) : null;
   const instrument_type = sanitizeInstrumentType(body.instrument_type);
@@ -604,6 +925,7 @@ function sanitizeItemInput(body) {
     warranty_note: str(body.warranty_note, 500),
     studio_status,
     studio_status_note: str(body.studio_status_note, 500),
+    disposition_date,
     parent_item_id: parentId && !isNaN(parentId) ? parentId : null,
     depreciated_value: num(body.depreciated_value),
     on_insurance_policy: body.on_insurance_policy === true || body.on_insurance_policy === 1 || body.on_insurance_policy === '1' ? 1 : 0,
@@ -623,7 +945,7 @@ function getParentSummary(parentId) {
 }
 
 function getAccessoryItems(parentId) {
-  return db.prepare('SELECT * FROM items WHERE parent_item_id = ? ORDER BY name').all(parentId);
+  return db.prepare('SELECT * FROM items WHERE parent_item_id = ? ORDER BY name, id').all(parentId);
 }
 
 function getAssemblyTotals(itemId) {
@@ -638,7 +960,7 @@ function getAssemblyTotals(itemId) {
     SELECT COUNT(*) AS component_count,
       COALESCE(SUM(purchase_price * quantity), 0) AS component_purchase,
       COALESCE(SUM(replacement_value * quantity), 0) AS component_replacement
-    FROM items WHERE id IN (SELECT id FROM descendants)
+    FROM items WHERE id IN (SELECT id FROM descendants) AND ${ownedStatusSql('studio_status')}
   `).get(itemId);
   const itemPurchase = Number(root.purchase_price || 0) * Number(root.quantity || 1);
   const itemReplacement = Number(root.replacement_value || 0) * Number(root.quantity || 1);
@@ -779,21 +1101,30 @@ function createFloorplan({ location, notes }) {
   return getFloorplan(result.lastInsertRowid);
 }
 
+/** Remove a replaced upload, logging instead of failing the save that replaced it. */
+function removeReplacedUpload(relativePath) {
+  if (!relativePath) return;
+  try {
+    removeUploadFile(relativePath);
+  } catch (err) {
+    console.warn(`Could not remove replaced file ${relativePath}: ${err.message}`);
+  }
+}
+
 function updateFloorplanImage(id, imagePath, width = 0, height = 0) {
+  const previous = db.prepare('SELECT image_path FROM floorplans WHERE id = ?').get(id)?.image_path;
   db.prepare(`
     UPDATE floorplans SET image_path = ?, width = ?, height = ?, map_mode = 'draw', updated_at = datetime('now')
     WHERE id = ?
   `).run(imagePath, width, height, id);
+  if (previous && previous !== imagePath) removeReplacedUpload(previous);
   return getFloorplan(id);
 }
 
 function clearFloorplanFloorImage(id) {
   const fp = getFloorplan(id);
   if (!fp) throw new Error('Floorplan not found');
-  if (fp.image_path) {
-    const full = path.join(UPLOADS_DIR, fp.image_path);
-    if (fs.existsSync(full)) fs.unlinkSync(full);
-  }
+  if (fp.image_path) removeUploadFile(fp.image_path);
   db.prepare(`
     UPDATE floorplans SET image_path = '', width = 0, height = 0,
       floor_image_scale = 1, floor_image_x = 0.5, floor_image_y = 0.5, floor_image_fit = 'cover',
@@ -803,12 +1134,17 @@ function clearFloorplanFloorImage(id) {
   return getFloorplan(id);
 }
 
+function finiteOr(value, fallback) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function updateFloorplanFloorView(id, body = {}) {
   const existing = db.prepare('SELECT id FROM floorplans WHERE id = ?').get(id);
   if (!existing) throw new Error('Floorplan not found');
   const scale = Math.min(4, Math.max(1, parseFloat(body.floor_image_scale) || 1));
-  const x = Math.min(1, Math.max(0, parseFloat(body.floor_image_x) ?? 0.5));
-  const y = Math.min(1, Math.max(0, parseFloat(body.floor_image_y) ?? 0.5));
+  const x = Math.min(1, Math.max(0, finiteOr(body.floor_image_x, 0.5)));
+  const y = Math.min(1, Math.max(0, finiteOr(body.floor_image_y, 0.5)));
   const fit = body.floor_image_fit === 'contain' ? 'contain' : 'cover';
   db.prepare(`
     UPDATE floorplans SET floor_image_scale = ?, floor_image_x = ?, floor_image_y = ?,
@@ -824,8 +1160,8 @@ function updateFloorplanGeometry(id, body = {}) {
 
   const polygon = Array.isArray(body.polygon) ? body.polygon : [];
   const cleaned = polygon.slice(0, 48).map(p => ({
-    x: Math.min(100, Math.max(0, parseFloat(p.x) || 0)),
-    y: Math.min(100, Math.max(0, parseFloat(p.y) || 0))
+    x: Math.min(100, Math.max(0, parseFloat(p?.x) || 0)),
+    y: Math.min(100, Math.max(0, parseFloat(p?.y) || 0))
   }));
   const unit = ['in', 'ft', 'cm', 'm'].includes(body.unit) ? body.unit : 'ft';
   const bounds_width = Math.max(0, parseFloat(body.bounds_width) || 0);
@@ -903,7 +1239,7 @@ function setFloorplanItems(floorplanId, items) {
 }
 
 function floorplanWallPhotosDir(floorplanId) {
-  const dir = path.join(UPLOADS_DIR, 'floorplans', 'walls', String(floorplanId));
+  const dir = path.join(UPLOADS_DIR, 'floorplans', 'walls', safeRecordId(floorplanId));
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -914,6 +1250,7 @@ function updateFloorplanWallPhoto(floorplanId, edgeIndex, relativePath) {
   const edge = Math.max(0, Math.min(47, parseInt(edgeIndex, 10) || 0));
   const row = db.prepare('SELECT wall_photos_json FROM floorplans WHERE id = ?').get(floorplanId);
   const photos = parseWallPhotosJson(row.wall_photos_json);
+  const previous = photos[String(edge)]?.path;
   photos[String(edge)] = {
     path: relativePath,
     updated_at: new Date().toISOString(),
@@ -924,6 +1261,8 @@ function updateFloorplanWallPhoto(floorplanId, edgeIndex, relativePath) {
   db.prepare(`
     UPDATE floorplans SET wall_photos_json = ?, updated_at = datetime('now') WHERE id = ?
   `).run(JSON.stringify(photos), floorplanId);
+  const stillUsed = Object.values(photos).some(photo => photo?.path === previous);
+  if (previous && !stillUsed) removeReplacedUpload(previous);
   return getFloorplan(floorplanId);
 }
 
@@ -937,10 +1276,10 @@ function updateFloorplanWallCalibration(floorplanId, edgeIndex, body = {}) {
   if (!existing.path) throw new Error('Upload a wall photo first');
 
   const corners = Array.isArray(body.corners) ? body.corners.slice(0, 4).map(p => ({
-    x: Math.min(1, Math.max(0, parseFloat(p.x) || 0)),
-    y: Math.min(1, Math.max(0, parseFloat(p.y) || 0))
+    x: Math.min(1, Math.max(0, parseFloat(p?.x) || 0)),
+    y: Math.min(1, Math.max(0, parseFloat(p?.y) || 0))
   })) : existing.corners;
-  if (corners.length !== 4) throw new Error('Four corner points required');
+  if (!Array.isArray(corners) || corners.length !== 4) throw new Error('Four corner points required');
 
   const lens_k = body.lens_k != null
     ? Math.min(0.35, Math.max(-0.35, parseFloat(body.lens_k) || 0))
@@ -1008,6 +1347,13 @@ function deleteFloorplan(id) {
   const fp = db.prepare('SELECT * FROM floorplans WHERE id = ?').get(id);
   if (!fp) throw new Error('Floorplan not found');
   db.prepare('DELETE FROM floorplans WHERE id = ?').run(id);
+  // Files after the row, and best effort: the floor image and every wall photo.
+  removeReplacedUpload(fp.image_path);
+  try {
+    fs.rmSync(path.join(UPLOADS_DIR, 'floorplans', 'walls', safeRecordId(id)), { recursive: true, force: true, maxRetries: 3 });
+  } catch (err) {
+    console.warn(`Could not remove wall photos for room ${id}: ${err.message}`);
+  }
   return fp;
 }
 
@@ -1089,6 +1435,7 @@ function getActiveLoans() {
     FROM loan_log l
     JOIN items i ON i.id = l.item_id
     WHERE l.returned_at IS NULL
+      AND ${ownedStatusSql('i.studio_status')}
     ORDER BY
       CASE WHEN l.due_date IS NULL OR l.due_date = '' THEN 1 ELSE 0 END,
       l.due_date ASC,
@@ -1111,14 +1458,34 @@ function getRecentLoanHistory(limit = 30) {
   return rows.map(enrichLoanRow);
 }
 
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** A YYYY-MM-DD date from a form, or null when left empty. Anything else is refused. */
+function loanDate(value, label) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const date = match ? new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])) : null;
+  if (!date || date.toISOString().slice(0, 10) !== text) {
+    throw new Error(`${label} must be a date like ${todayIso()}`);
+  }
+  return text;
+}
+
 function checkoutItem(itemId, data = {}) {
+  const item = db.prepare('SELECT studio_status FROM items WHERE id = ?').get(itemId);
+  if (!item) throw new Error('Item not found');
+  if (isFormerStatus(item.studio_status)) throw new Error('Gear that has left the collection cannot be loaned');
   if (getActiveLoanForItem(itemId)) throw new Error('Item is already on loan');
 
   const borrower_name = String(data.borrower_name || '').trim();
   if (!borrower_name) throw new Error('Borrower name is required');
 
-  const loaned_at = String(data.loaned_at || '').trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
-  const due_date = String(data.due_date || '').trim().slice(0, 10) || null;
+  const loaned_at = loanDate(data.loaned_at, 'Loan date') || todayIso();
+  const due_date = loanDate(data.due_date, 'Due date');
+  if (due_date && due_date < loaned_at) throw new Error('Due date cannot be before the loan date');
   const borrower_contact = String(data.borrower_contact || '').trim().slice(0, 200);
   const note = String(data.note || '').trim().slice(0, 2000);
   const condition_out = String(data.condition_out || '').trim().slice(0, 500);
@@ -1129,6 +1496,7 @@ function checkoutItem(itemId, data = {}) {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(itemId, borrower_name, borrower_contact, loaned_at, due_date, note, condition_out);
 
+    if (item.studio_status !== 'loaned') recordAuditChange(itemId, 'studio_status', item.studio_status, 'loaned');
     db.prepare(`
       UPDATE items SET studio_status = 'loaned', studio_status_note = ?, updated_at = datetime('now')
       WHERE id = ?
@@ -1149,7 +1517,7 @@ function returnLoan(loanId, data = {}) {
   if (!loan) throw new Error('Loan not found');
   if (loan.returned_at) throw new Error('Item already returned');
 
-  const returned_at = String(data.returned_at || '').trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const returned_at = loanDate(data.returned_at, 'Return date') || todayIso();
   const condition_in = String(data.condition_in || '').trim().slice(0, 500);
   const returnNote = String(data.return_note || '').trim().slice(0, 2000);
 
@@ -1161,10 +1529,14 @@ function returnLoan(loanId, data = {}) {
       WHERE id = ?
     `).run(returned_at, condition_in, returnNote, returnNote, loanId);
 
-    db.prepare(`
-      UPDATE items SET studio_status = 'in_studio', studio_status_note = '', updated_at = datetime('now')
-      WHERE id = ?
-    `).run(loan.item_id);
+    const current = db.prepare('SELECT studio_status FROM items WHERE id = ?').get(loan.item_id);
+    if (current?.studio_status === 'loaned') {
+      recordAuditChange(loan.item_id, 'studio_status', 'loaned', 'in_studio');
+      db.prepare(`
+        UPDATE items SET studio_status = 'in_studio', studio_status_note = '', updated_at = datetime('now')
+        WHERE id = ?
+      `).run(loan.item_id);
+    }
 
     const placement = getItemMapPlacement(loan.item_id);
     const wall_rehang_pending = !!(placement?.placement === 'wall' && placement.wall_display === false);
@@ -1188,22 +1560,25 @@ function deleteLoanEntry(id) {
 }
 
 function wallPhotoDir(itemId) {
-  const dir = path.join(UPLOADS_DIR, 'wall-photos', String(itemId));
+  const dir = path.join(UPLOADS_DIR, 'wall-photos', safeRecordId(itemId));
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function getItemMapPlacement(itemId) {
-  const row = db.prepare(`
+const MAP_PLACEMENT_SQL = `
     SELECT fi.*, f.id as floorplan_id, f.location as floorplan_location, f.ceiling_height, f.unit,
       i.name, i.brand, b.logo_path as brand_logo_path
     FROM floorplan_items fi
     JOIN floorplans f ON f.id = fi.floorplan_id
     JOIN items i ON i.id = fi.item_id
-    LEFT JOIN brands b ON b.name = i.brand COLLATE NOCASE
-    WHERE fi.item_id = ?
-  `).get(itemId);
-  if (!row) return null;
+    LEFT JOIN brands b ON b.name = i.brand COLLATE NOCASE`;
+
+function getItemMapPlacement(itemId) {
+  const row = cachedStatement(`${MAP_PLACEMENT_SQL} WHERE fi.item_id = ? ORDER BY fi.floorplan_id LIMIT 1`).get(itemId);
+  return row ? mapPlacementFromRow(row) : null;
+}
+
+function mapPlacementFromRow(row) {
   return {
     floorplan_id: row.floorplan_id,
     floorplan_location: row.floorplan_location,
@@ -1215,26 +1590,43 @@ function getItemMapPlacement(itemId) {
 
 function itemUploadDir(itemId, type) {
   const sub = { photo: 'photos', manual: 'manuals', document: 'manuals', software: 'software', receipt: 'receipts' }[type] || 'manuals';
-  const dir = path.join(UPLOADS_DIR, sub, String(itemId));
+  const dir = path.join(UPLOADS_DIR, sub, safeRecordId(itemId));
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return { dir, sub };
 }
 
 function removeItemUploadDirs(itemId) {
-  for (const sub of ['photos', 'manuals', 'software', 'receipts']) {
-    const dir = path.join(UPLOADS_DIR, sub, String(itemId));
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  const id = safeRecordId(itemId);
+  const stillUsed = db.prepare('SELECT 1 FROM attachments WHERE relative_path = ? LIMIT 1');
+  for (const sub of ['photos', 'manuals', 'software', 'receipts', 'wall-photos']) {
+    const dir = path.join(UPLOADS_DIR, sub, id);
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    let kept = 0;
+    for (const name of names) {
+      // Another record may point at this file (catalogs merged by an older version did that).
+      if (stillUsed.get(`${sub}/${id}/${name}`)) { kept++; continue; }
+      try {
+        fs.rmSync(path.join(dir, name), { recursive: true, force: true, maxRetries: 3 });
+      } catch (err) {
+        kept++;
+        console.warn(`Could not remove ${path.join(dir, name)}: ${err.message}`);
+      }
+    }
+    if (!kept) {
+      try { fs.rmdirSync(dir); } catch { /* not empty or already gone */ }
+    }
   }
 }
 
 function softwareLicenseDir(id) {
-  const dir = path.join(UPLOADS_DIR, 'software-licenses', String(id));
+  const dir = path.join(UPLOADS_DIR, 'software-licenses', safeRecordId(id));
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
 function removeSoftwareLicenseDir(id) {
-  const dir = path.join(UPLOADS_DIR, 'software-licenses', String(id));
+  const dir = path.join(UPLOADS_DIR, 'software-licenses', safeRecordId(id));
   if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
 }
 
@@ -1388,10 +1780,7 @@ function updateSoftware(id, body) {
 function updateSoftwareScreenshot(id, relativePath) {
   const existing = db.prepare('SELECT screenshot_path FROM software_licenses WHERE id = ?').get(id);
   if (!existing) throw new Error('Software license not found');
-  if (existing.screenshot_path) {
-    const old = path.join(UPLOADS_DIR, existing.screenshot_path);
-    if (fs.existsSync(old)) fs.unlinkSync(old);
-  }
+  if (existing.screenshot_path) removeUploadFile(existing.screenshot_path);
   db.prepare(`
     UPDATE software_licenses SET screenshot_path = ?, updated_at = datetime('now') WHERE id = ?
   `).run(relativePath, id);
@@ -1401,10 +1790,7 @@ function updateSoftwareScreenshot(id, relativePath) {
 function clearSoftwareScreenshot(id) {
   const existing = db.prepare('SELECT screenshot_path FROM software_licenses WHERE id = ?').get(id);
   if (!existing) throw new Error('Software license not found');
-  if (existing.screenshot_path) {
-    const fp = path.join(UPLOADS_DIR, existing.screenshot_path);
-    if (fs.existsSync(fp)) fs.unlinkSync(fp);
-  }
+  if (existing.screenshot_path) removeUploadFile(existing.screenshot_path);
   db.prepare(`
     UPDATE software_licenses SET screenshot_path = '', updated_at = datetime('now') WHERE id = ?
   `).run(id);
@@ -1448,6 +1834,7 @@ function getSoftwareTotals() {
 
 module.exports = {
   db,
+  catalogLock,
   DB_PATH,
   DATA_DIR,
   UPLOADS_DIR,
@@ -1457,13 +1844,27 @@ module.exports = {
   DRIVER_CATEGORIES,
   initSchema,
   enrichItem,
+  enrichItems,
   setItemTags,
+  FORMER_STATUSES,
+  isFormerStatus,
+  ownedStatusSql,
+  cascadeFormerStatus,
+  restoreCascadedChildren,
+  recordItemChanges,
+  recordReplacementValue,
+  getValueEvents,
+  getItemAudit,
+  backfillOpeningValues,
   sanitizeItemInput,
   getTagsForItem,
   getAttachmentsForItem,
   getAssemblyTotals,
   itemUploadDir,
   removeItemUploadDirs,
+  safeRecordId,
+  resolveUploadPath,
+  removeUploadFile,
   safeJsonParse,
   brandSlug,
   ensureBrand,

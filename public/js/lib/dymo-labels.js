@@ -116,6 +116,7 @@ export function buildOwnerLabelXml(item, options = {}) {
 }
 
 let dymoLoadPromise = null;
+const DYMO_LOAD_TIMEOUT_MS = 6000;
 
 export function loadDymoFramework() {
   if (window.dymo?.label?.framework) return Promise.resolve(window.dymo.label.framework);
@@ -123,16 +124,26 @@ export function loadDymoFramework() {
 
   dymoLoadPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script');
+    // Offline or a slow network must not hang the Labels page: give up after a few seconds.
+    const timer = setTimeout(() => fail(new Error('DYMO Connect framework did not load (offline?)')), DYMO_LOAD_TIMEOUT_MS);
+    const fail = (err) => {
+      clearTimeout(timer);
+      script.remove();
+      reject(err);
+    };
     script.src = 'https://qajavascriptsdktests.azurewebsites.net/JavaScript/dymo.connect.framework.js';
     script.onload = () => {
+      clearTimeout(timer);
       const fw = window.dymo?.label?.framework;
-      if (!fw) return reject(new Error('DYMO framework loaded but unavailable'));
+      if (!fw) return fail(new Error('DYMO framework loaded but unavailable'));
       try { fw.init(); } catch { /* may already be initialized */ }
       resolve(fw);
     };
-    script.onerror = () => reject(new Error('Failed to load DYMO Connect framework'));
+    script.onerror = () => fail(new Error('Failed to load DYMO Connect framework'));
     document.head.appendChild(script);
   });
+  // A failed load may succeed later (back online): don't remember the failure.
+  dymoLoadPromise.catch(() => { dymoLoadPromise = null; });
 
   return dymoLoadPromise;
 }
@@ -227,9 +238,22 @@ html, body { margin: 0; padding: 0; }
     ${item.serial_number ? `S/N: ${item.serial_number.replace(/</g, '')}<br>` : ''}
     ${item.location ? `Loc: ${item.location.replace(/</g, '')}` : ''}
   </div>
-  <div class="qr"><img src="${getQrImageUrl(item.id, options.baseUrl)}" alt="QR"></div>
+  <div class="qr"><img src="${escapeXml(getQrImageUrl(item.id, options.baseUrl))}" alt="QR"></div>
 </div>
-<script>window.onload=()=>{window.print(); setTimeout(()=>window.close(), 500);}</script>
 </body></html>`);
   win.document.close();
+  // Print once the QR image has loaded. (An inline <script> here would be
+  // blocked by the Content-Security-Policy this pop-up inherits.)
+  const printAndClose = () => {
+    win.focus();
+    win.print();
+    setTimeout(() => win.close(), 500);
+  };
+  const qr = win.document.querySelector('.qr img');
+  if (qr && !qr.complete) {
+    qr.addEventListener('load', printAndClose, { once: true });
+    qr.addEventListener('error', printAndClose, { once: true });
+  } else {
+    setTimeout(printAndClose, 0);
+  }
 }

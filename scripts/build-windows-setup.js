@@ -9,6 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { SAFE_REPLACE_CS } = require('./installer-safe-replace');
 
 const packageDir = path.resolve(process.argv[2] || '');
 const outputExe = path.resolve(process.argv[3] || '');
@@ -107,7 +108,6 @@ class StudioInventorySetup {
   public static void Install(InstallOptions options, Action<string> status) {
     string tempRoot = Path.Combine(Path.GetTempPath(), "studio-inventory-setup-" + Guid.NewGuid().ToString("N"));
     string payloadDir = Path.Combine(tempRoot, "payload");
-    string backupDir = Path.Combine(tempRoot, "data-backup");
 
     try {
       Status(status, "Extracting installer payload...");
@@ -119,29 +119,9 @@ class StudioInventorySetup {
       }
 
       Status(status, "Preparing install folder...");
-      string target = Path.GetFullPath(options.TargetDir);
-      string dataDir = Path.Combine(target, "data");
+      string target = Path.GetFullPath(options.TargetDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
       StopInstalledProcesses(target);
-
-      if (Directory.Exists(dataDir) && options.KeepData) {
-        Status(status, "Preserving existing inventory data...");
-        CopyDirectory(dataDir, backupDir);
-      }
-
-      if (Directory.Exists(target)) {
-        Directory.Delete(target, true);
-      }
-      Directory.CreateDirectory(target);
-
-      Status(status, "Copying Studio Inventory files...");
-      CopyDirectory(payloadDir, target);
-
-      if (Directory.Exists(backupDir)) {
-        Status(status, "Restoring existing inventory data...");
-        string restoredData = Path.Combine(target, "data");
-        if (Directory.Exists(restoredData)) Directory.Delete(restoredData, true);
-        CopyDirectory(backupDir, restoredData);
-      }
+      SafeReplaceInstall(payloadDir, target, options.KeepData, status);
 
       Status(status, "Writing uninstaller...");
       WriteUninstaller(target);
@@ -160,6 +140,7 @@ class StudioInventorySetup {
           "Microsoft", "Windows", "Start Menu", "Programs", "Studio Inventory");
         Directory.CreateDirectory(startMenu);
         CreateShortcut(Path.Combine(startMenu, "Studio Inventory.lnk"), Path.Combine(target, "Studio Inventory.exe"), target);
+        CreateShortcut(Path.Combine(startMenu, "Stop Studio Inventory.lnk"), Path.Combine(target, "Studio Inventory.exe"), target, "--stop");
         CreateShortcut(Path.Combine(startMenu, "Uninstall Studio Inventory.lnk"), Path.Combine(target, "Uninstall Studio Inventory.cmd"), target);
       }
 
@@ -173,6 +154,8 @@ class StudioInventorySetup {
       } catch {}
     }
   }
+
+${SAFE_REPLACE_CS}
 
   static void ExtractPayload(string payloadDir) {
     string self = Application.ExecutablePath;
@@ -232,19 +215,6 @@ class StudioInventorySetup {
     }
   }
 
-  static void StopInstalledProcesses(string target) {
-    string normalizedTarget = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-    foreach (Process p in Process.GetProcessesByName("node")) {
-      try {
-        string path = p.MainModule.FileName;
-        if (!String.IsNullOrWhiteSpace(path) && path.StartsWith(normalizedTarget, StringComparison.OrdinalIgnoreCase)) {
-          p.Kill();
-          p.WaitForExit(5000);
-        }
-      } catch {}
-    }
-  }
-
   static void WriteUninstaller(string target) {
     string uninstallPath = Path.Combine(target, "Uninstall Studio Inventory.cmd");
     string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
@@ -261,6 +231,7 @@ class StudioInventorySetup {
       "echo.\r\n" +
       "choice /C YN /M \"Remove your inventory data too\"\r\n" +
       "set \"REMOVE_DATA=%ERRORLEVEL%\"\r\n" +
+      "if exist \"%APPDIR%\\Studio Inventory.exe\" start \"\" /wait \"%APPDIR%\\Studio Inventory.exe\" --stop --silent\r\n" +
       "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ($env:APPDIR + '*') } | Stop-Process -Force\" >nul 2>nul\r\n" +
       "reg delete \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Studio Inventory\" /f >nul 2>nul\r\n" +
       "del \"%DESKTOP%\\Studio Inventory.lnk\" >nul 2>nul\r\n" +
@@ -356,12 +327,15 @@ class StudioInventorySetup {
     return Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Replace('\\', '/');
   }
 
-  static void CreateShortcut(string linkPath, string targetPath, string workingDirectory) {
+  static void CreateShortcut(string linkPath, string targetPath, string workingDirectory, string arguments = "") {
     Type shellType = Type.GetTypeFromProgID("WScript.Shell");
     object shell = Activator.CreateInstance(shellType);
     object shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { linkPath });
     Type shortcutType = shortcut.GetType();
     shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { targetPath });
+    if (!String.IsNullOrEmpty(arguments)) {
+      shortcutType.InvokeMember("Arguments", BindingFlags.SetProperty, null, shortcut, new object[] { arguments });
+    }
     shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { workingDirectory });
     shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "Studio Inventory — local music gear catalog" });
     shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);

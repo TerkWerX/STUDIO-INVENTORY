@@ -104,10 +104,15 @@ function openWallForPlacement(edge) {
       renderFloorplan(activeFp.id);
       showToast('Item placed on wall');
     },
-    onPhotoEdit: (pin) => openPhotoHangForPin(activeFp, pin),
+    onPhotoEdit: (pin) => openPhotoHangForPin(activeFp, pin).catch(err => showToast(err.message || 'Could not open the wall photo editor', 'error')),
     onToast: showToast
   });
 }
+
+// Anything that fails without its own handler still tells the user.
+window.addEventListener('unhandledrejection', (event) => {
+  showToast(event.reason?.message || 'Something went wrong', 'error');
+});
 
 async function init() {
   try {

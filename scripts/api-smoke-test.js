@@ -4,7 +4,8 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const AdmZip = require('adm-zip');
+const { Readable } = require('stream');
+const yazl = require('yazl');
 
 const ROOT = path.join(__dirname, '..');
 const PORT = process.env.SMOKE_PORT || 3850;
@@ -35,13 +36,178 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
+/** Write a small ZIP from { name: content } for test fixtures. */
+function writeTestZip(filePath, entries) {
+  return new Promise((resolve, reject) => {
+    const zip = new yazl.ZipFile();
+    for (const [name, content] of Object.entries(entries)) zip.addBuffer(Buffer.from(content), name);
+    zip.end();
+    zip.outputStream.pipe(fs.createWriteStream(filePath)).on('close', resolve).on('error', reject);
+  });
+}
+
+/** Every file entry of a (small, test) ZIP as { name: Buffer }. */
+async function readTestZip(filePath) {
+  const { listZipEntries, readZipEntry } = require('../lib/folder-backup');
+  const out = {};
+  for (const name of await listZipEntries(filePath)) {
+    if (!name.endsWith('/')) out[name] = await readZipEntry(filePath, name, Infinity);
+  }
+  return out;
+}
+
 async function main() {
   if (fs.existsSync(DATA_DIR)) {
     try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* win lock */ }
   }
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
-  const env = { ...process.env, PORT: String(PORT), STUDIO_DATA_DIR: DATA_DIR };
+  const { writeStreamAtomically, rotateBackupFiles, backupDiskWarning, validateBackupDir } = require('../lib/folder-backup');
+  const atomicDir = path.join(DATA_DIR, 'atomic-check');
+  fs.mkdirSync(atomicDir, { recursive: true });
+  const goodPath = path.join(atomicDir, 'studio-inventory-full-backup-good.zip');
+  await writeStreamAtomically(Readable.from([Buffer.from('keep')]), goodPath);
+  let atomicFailed = false;
+  try {
+    await writeStreamAtomically(Readable.from([Buffer.from('bad')]), path.join(atomicDir, 'studio-inventory-full-backup-bad.zip'), { failAfterPartial: true });
+  } catch {
+    atomicFailed = true;
+  }
+  assert(atomicFailed, 'partial backup write should fail');
+  assert(fs.existsSync(goodPath), 'failed write removed the previous backup');
+  assert(!fs.readdirSync(atomicDir).some(name => name.endsWith('.partial')), 'partial backup file was left behind');
+  fs.writeFileSync(path.join(atomicDir, 'studio-inventory-full-backup-older.zip'), 'old');
+  fs.writeFileSync(path.join(atomicDir, 'studio-inventory-full-backup-newer.zip'), 'new');
+  fs.writeFileSync(path.join(atomicDir, 'studio-inventory-recovery.zip'), 'recovery');
+  fs.writeFileSync(path.join(atomicDir, 'studio-inventory-full-backup-2020-01-monthly.zip.enc'), 'old-month');
+  const rotated = rotateBackupFiles(atomicDir, 2);
+  assert(rotated.length === 2, 'backup rotation did not keep the newest files');
+  assert(!rotated.includes('studio-inventory-full-backup-good.zip'), 'rotation removed a newer backup');
+  assert(fs.existsSync(path.join(atomicDir, 'studio-inventory-recovery.zip')), 'rotation deleted the recovery ZIP');
+  assert(fs.existsSync(path.join(atomicDir, 'studio-inventory-full-backup-2020-01-monthly.zip.enc')), 'rotation deleted a monthly backup');
+  const { pruneMonthlyBackups } = require('../lib/folder-backup');
+  pruneMonthlyBackups(atomicDir, 6, new Date('2026-09-22T00:00:00Z'));
+  assert(!fs.existsSync(path.join(atomicDir, 'studio-inventory-full-backup-2020-01-monthly.zip.enc')), 'monthly backup older than six months was kept');
+  const sameDiskDir = path.join(ROOT, 'data', '.api-smoke-same-disk');
+  fs.mkdirSync(sameDiskDir, { recursive: true });
+  validateBackupDir(sameDiskDir, DATA_DIR);
+  // Windows looks the disks up in the background; wait for that before asking.
+  await require('../lib/folder-backup').warmBackupDiskInfo(sameDiskDir, DATA_DIR);
+  const diskWarning = backupDiskWarning(sameDiskDir, DATA_DIR);
+  // Windows names the physical disk; macOS and Linux can only tell it is the same device.
+  assert(/same (physical disk|device)/i.test(diskWarning), `same-disk folder was not warned: ${diskWarning}`);
+  assert(/offsite/i.test(diskWarning), 'backup warning did not mention an offsite copy');
+  assert(/USB thumb drive/i.test(diskWarning), 'backup warning did not allow a USB thumb drive');
+  console.log('✓ folder backup atomic write');
+
+  const KEY_DIR = path.join(ROOT, 'data', '.api-smoke-keys');
+  fs.rmSync(KEY_DIR, { recursive: true, force: true });
+  fs.mkdirSync(KEY_DIR, { recursive: true });
+  process.env.STUDIO_KEY_DIR = KEY_DIR;
+  const PlainDatabase = require('better-sqlite3');
+  const { openInventoryDatabase, isPlainSqlite } = require('../lib/open-database');
+  const migrateDir = path.join(ROOT, 'data', '.api-smoke-migrate');
+  fs.rmSync(migrateDir, { recursive: true, force: true });
+  fs.mkdirSync(migrateDir, { recursive: true });
+  const migrateFile = path.join(migrateDir, 'inventory.db');
+  const plain = new PlainDatabase(migrateFile);
+  plain.exec('CREATE TABLE kept (name TEXT)');
+  plain.prepare('INSERT INTO kept VALUES (?)').run('Kept Guitar');
+  plain.close();
+  const unarmed = openInventoryDatabase(migrateFile);
+  assert(unarmed.prepare('SELECT name FROM kept').get().name === 'Kept Guitar', 'unarmed open lost the row');
+  unarmed.close();
+  assert(isPlainSqlite(migrateFile), 'unarmed catalog was encrypted');
+  fs.writeFileSync(path.join(migrateDir, 'studio-settings.json'), JSON.stringify({ catalogEncryption: 'armed' }));
+  const migrated = openInventoryDatabase(migrateFile);
+  assert(migrated.prepare('SELECT name FROM kept').get().name === 'Kept Guitar', 'encryption migration lost the row');
+  migrated.close();
+  assert(!isPlainSqlite(migrateFile), 'migrated catalog is still a plain SQLite file');
+  assert(!fs.existsSync(`${migrateFile}.plain`), 'plaintext catalog was left beside the encrypted file');
+  fs.copyFileSync(migrateFile, path.join(ROOT, 'data', '.api-smoke-copied.db'));
+  fs.rmSync(migrateDir, { recursive: true, force: true });
+  const savedKeyDir = process.env.STUDIO_KEY_DIR;
+  process.env.STUDIO_KEY_DIR = path.join(ROOT, 'data', '.api-smoke-nokey');
+  fs.mkdirSync(process.env.STUDIO_KEY_DIR, { recursive: true });
+  let refused = false;
+  try {
+    openInventoryDatabase(path.join(ROOT, 'data', '.api-smoke-copied.db'));
+  } catch (err) {
+    refused = /key/i.test(err.message);
+  }
+  assert(refused, 'copied database opened without its catalog key');
+  assert(!isPlainSqlite(path.join(ROOT, 'data', '.api-smoke-copied.db')), 'failed unlock rewrote the copied database');
+  const { openWithSuppliedKey } = require('../lib/open-database');
+  const { getDataKey, installRecoveryKey } = require('../lib/data-key');
+  const { assertPlainRecoveryZip } = require('../lib/move-catalog');
+  process.env.STUDIO_KEY_DIR = savedKeyDir;
+  const paperKey = getDataKey().toString('base64');
+  const moveKeyDir = path.join(ROOT, 'data', '.api-smoke-move-keys');
+  fs.rmSync(moveKeyDir, { recursive: true, force: true });
+  fs.mkdirSync(moveKeyDir, { recursive: true });
+  const copiedDb = path.join(ROOT, 'data', '.api-smoke-copied.db');
+  process.env.STUDIO_KEY_DIR = moveKeyDir;
+  let lockedCode = '';
+  try { openInventoryDatabase(copiedDb); } catch (err) { lockedCode = err.code || ''; }
+  assert(lockedCode === 'CATALOG_LOCKED', 'a new machine did not stop for the recovery key');
+  let wrongRejected = false;
+  try { openWithSuppliedKey(copiedDb, Buffer.alloc(32).toString('base64')); } catch { wrongRejected = true; }
+  assert(wrongRejected, 'wrong recovery key opened the catalog');
+  assert(!fs.existsSync(path.join(moveKeyDir, 'catalog-key.blob')), 'wrong key replaced the Windows key');
+  const moved = openWithSuppliedKey(copiedDb, paperKey);
+  assert(moved.prepare('SELECT name FROM kept').get().name === 'Kept Guitar', 'recovery key did not open the catalog');
+  moved.close();
+  installRecoveryKey(paperKey);
+  const reopened = openInventoryDatabase(copiedDb);
+  assert(reopened.prepare('SELECT name FROM kept').get().name === 'Kept Guitar', 'saved recovery key did not reopen the catalog');
+  reopened.close();
+  const encryptedZip = path.join(ROOT, 'data', '.api-smoke-encrypted-backup.bin');
+  fs.writeFileSync(encryptedZip, Buffer.concat([Buffer.from('SIDB'), Buffer.alloc(20)]));
+  let rejectedEncryptedZip = false;
+  try { await assertPlainRecoveryZip(encryptedZip); } catch (err) { rejectedEncryptedZip = /recovery key/i.test(err.message); }
+  assert(rejectedEncryptedZip, 'encrypted backup was accepted as a recovery ZIP');
+  const plainZipPath = path.join(ROOT, 'data', '.api-smoke-recovery-shape.zip');
+  await writeTestZip(plainZipPath, {
+    'backup.json': JSON.stringify({ manifest: { format: 'studio-inventory-full-backup' }, tables: {} })
+  });
+  await assertPlainRecoveryZip(plainZipPath);
+  fs.unlinkSync(encryptedZip);
+  fs.unlinkSync(plainZipPath);
+  process.env.STUDIO_KEY_DIR = savedKeyDir;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try { fs.unlinkSync(copiedDb); break; } catch (err) {
+      if (attempt === 9) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
+  console.log('✓ encrypted catalog round-trip and locked copy');
+
+  const backfillDir = path.join(ROOT, 'data', '.api-smoke-backfill');
+  fs.rmSync(backfillDir, { recursive: true, force: true });
+  process.env.STUDIO_DATA_DIR = backfillDir;
+  const { db: backfillDb, initSchema, backfillOpeningValues } = require('../db');
+  initSchema();
+  backfillDb.prepare(`INSERT INTO items (name, replacement_value, value_updated_at) VALUES ('Old Amp', 250, '2024-05-01 12:00:00')`).run();
+  assert(backfillOpeningValues() === 1, 'opening snapshot was not written');
+  const opening = backfillDb.prepare('SELECT amount, note, recorded_at FROM item_value_events').get();
+  assert(opening.amount === 250 && opening.note === 'Opening snapshot', 'opening snapshot is wrong');
+  assert(String(opening.recorded_at).startsWith('2024-05-01'), 'opening snapshot ignored the existing date');
+  assert(backfillOpeningValues() === 0, 'opening snapshot was written twice');
+  backfillDb.close();
+  delete process.env.STUDIO_DATA_DIR;
+  console.log('✓ opening value snapshot');
+
+  const env = {
+    ...process.env,
+    PORT: String(PORT),
+    STUDIO_DATA_DIR: DATA_DIR,
+    STUDIO_KEY_DIR: KEY_DIR,
+    STUDIO_SKIP_AUTO_BACKUP: '1',
+    STUDIO_ENCRYPT_NOW: '1',
+    STUDIO_ALLOW_SAME_DISK: '1',
+    // The archive-from-URL test downloads from this test server on 127.0.0.1.
+    STUDIO_ALLOW_PRIVATE_DOWNLOADS: '1'
+  };
   await new Promise((resolve, reject) => {
     const seed = spawn('node', ['seed.js', '--force'], { cwd: ROOT, env, stdio: 'inherit' });
     seed.on('close', c => (c === 0 ? resolve() : reject(new Error('seed failed'))));
@@ -53,6 +219,7 @@ async function main() {
   try {
     const health = await waitForHealth(`${base}/health`);
     assert(health.version, 'health missing version');
+    assert(!isPlainSqlite(path.join(DATA_DIR, 'inventory.db')), 'catalog was left as a plain SQLite file');
     console.log('✓ health', health.version);
 
     const created = await api(base, '/items', {
@@ -249,6 +416,34 @@ async function main() {
     assert(Array.isArray(guestItems), 'guest items failed');
     console.log('✓ guest link');
 
+    const { findGearDocuments, buildDocumentQueries } = require('../lib/manual-finder');
+    const queries = buildDocumentQueries({ brand: 'Shure', model: 'SM57', name: 'SM57' }, { kind: 'all' });
+    assert(queries.length === 3, 'document search did not cover user, service, and quick start');
+    assert(queries.some(entry => /service manual/i.test(entry.query)), 'service manual query missing');
+    assert(queries.some(entry => /quick start/i.test(entry.query)), 'quick start query missing');
+    const specQuery = buildDocumentQueries({ brand: 'Shure', model: 'SM57', name: 'SM57' }, { kind: 'spec' });
+    assert(specQuery.length === 1 && /spec sheet/i.test(specQuery[0].query), 'spec sheet was not a separate document search');
+    const warrantyQuery = buildDocumentQueries({ brand: 'Shure', model: 'SM57', name: 'SM57' }, { kind: 'warranty' });
+    assert(/warranty/i.test(warrantyQuery[0].query), 'warranty was not a separate document search');
+    const documentLookup = await findGearDocuments({ brand: 'Shure', model: 'SM57', name: 'SM57' }, {
+      kind: 'all',
+      fetchText: async (url) => {
+        if (url.includes('lite.duckduckgo.com')) return '<html></html>';
+        if (url.includes('support.example.test/sm57')) {
+          return '<html><a href="https://support.example.test/sm57-quickstart.pdf">SM57 Quick Start Guide</a></html>';
+        }
+        return `<html>
+          <a class="result__a" href="https://html.duckduckgo.com/l/?uddg=${encodeURIComponent('https://support.example.test/sm57-user.pdf')}">Shure SM57 User Manual PDF</a>
+          <a class="result__a" href="https://html.duckduckgo.com/l/?uddg=${encodeURIComponent('https://support.example.test/sm57')}">Shure SM57 support page</a>
+        </html>`;
+      }
+    });
+    const savedPdf = documentLookup.results.find(result => result.downloadUrl === 'https://support.example.test/sm57-user.pdf');
+    assert(savedPdf && savedPdf.kind === 'user', 'direct user-manual PDF was not downloadable');
+    const supportPage = documentLookup.results.find(result => result.url === 'https://support.example.test/sm57');
+    assert(supportPage?.files?.some(file => file.url.endsWith('sm57-quickstart.pdf')), 'page scan did not find the quick start PDF');
+    console.log('✓ document lookup finds a PDF and keeps it on the gear');
+
     const manualSearch = await api(base, '/manuals/search?q=test');
     assert(Array.isArray(manualSearch), 'manual search not array');
     console.log('✓ manual search endpoint');
@@ -404,16 +599,31 @@ async function main() {
     assert(cal?.wall_photos?.['0']?.calibrated === true, 'wall calibration not saved');
     console.log('✓ floorplans v2 + loan wall hide + wall align');
 
+    // The item list enriches every item in one batch; each entry must match
+    // what the item's own page shows.
+    const listed = await api(base, '/items?include_accessories=1&include_former=1');
+    assert(listed.length >= 3, 'item list unexpectedly short');
+    for (const entry of listed) {
+      const { assembly_totals: _totals, value_events: _events, audit: _audit, ...single } = await api(base, `/items/${entry.id}`);
+      assert(JSON.stringify(single) === JSON.stringify(entry), `item ${entry.id} differs between the list and its own page`);
+    }
+    assert(listed.some(i => i.accessories.length) && listed.some(i => i.map_placement) && listed.some(i => i.loans.length)
+      && listed.some(i => i.photos.length) && listed.some(i => i.tags.length),
+    'list check did not cover accessories, placements, loans, photos and tags');
+    console.log('✓ item list matches each item page (batched enrichment)');
+
     const backupRes = await fetch(`${base}/export/full`);
     assert(backupRes.ok, 'full backup export failed');
     const backupBuffer = Buffer.from(await backupRes.arrayBuffer());
-    const backupZip = new AdmZip(backupBuffer);
-    const backupJsonEntry = backupZip.getEntry('backup.json');
-    assert(backupJsonEntry, 'full backup missing backup.json');
-    const backupJson = JSON.parse(backupJsonEntry.getData().toString('utf8'));
+    const downloadedZipPath = path.join(ROOT, 'data', '.api-smoke-download.zip');
+    fs.writeFileSync(downloadedZipPath, backupBuffer);
+    const backupEntries = await readTestZip(downloadedZipPath);
+    fs.unlinkSync(downloadedZipPath);
+    assert(backupEntries['backup.json'], 'full backup missing backup.json');
+    const backupJson = JSON.parse(backupEntries['backup.json'].toString('utf8'));
     assert(backupJson.tables.floorplans.some(row => row.id === fp.id), 'full backup missing floorplan row');
     assert(backupJson.tables.floorplan_items.length >= 1, 'full backup missing wall placements');
-    assert(backupZip.getEntries().some(e => e.entryName.startsWith('uploads/floorplans/walls/')), 'full backup missing wall photo files');
+    assert(Object.keys(backupEntries).some(name => name.startsWith('uploads/floorplans/walls/')), 'full backup missing wall photo files');
 
     const restoreForm = new FormData();
     restoreForm.append('backup', new Blob([backupBuffer], { type: 'application/zip' }), 'studio-backup.zip');
@@ -431,12 +641,14 @@ async function main() {
       'full backup restore invalidated printed signed QR labels');
     console.log('✓ full backup export / restore');
 
-    const invalidZip = new AdmZip(backupBuffer);
-    const invalidBackup = JSON.parse(invalidZip.getEntry('backup.json').getData().toString('utf8'));
+    const invalidBackup = JSON.parse(backupEntries['backup.json'].toString('utf8'));
     invalidBackup.tables.floorplan_items[0].item_id = 987654321;
-    invalidZip.updateFile('backup.json', Buffer.from(JSON.stringify(invalidBackup), 'utf8'));
+    const invalidZipPath = path.join(ROOT, 'data', '.api-smoke-invalid.zip');
+    await writeTestZip(invalidZipPath, { ...backupEntries, 'backup.json': JSON.stringify(invalidBackup) });
+    const invalidZipBytes = fs.readFileSync(invalidZipPath);
+    fs.unlinkSync(invalidZipPath);
     const invalidRestoreForm = new FormData();
-    invalidRestoreForm.append('backup', new Blob([invalidZip.toBuffer()], { type: 'application/zip' }), 'invalid-backup.zip');
+    invalidRestoreForm.append('backup', new Blob([invalidZipBytes], { type: 'application/zip' }), 'invalid-backup.zip');
     const invalidRestoreRes = await fetch(`${base}/import/full`, { method: 'POST', body: invalidRestoreForm });
     const invalidRestoreBody = await invalidRestoreRes.json().catch(() => ({}));
     assert(!invalidRestoreRes.ok, 'invalid full backup should be rejected');
@@ -496,7 +708,8 @@ async function main() {
       body: JSON.stringify({
         items: jsonExport.items,
         software_licenses: jsonExport.software_licenses,
-        replace: true
+        replace: true,
+        confirmPhrase: 'replace the catalog'
       })
     });
     assert(jsonImport.imported === jsonExport.items.length, 'JSON import item count mismatch');
@@ -521,6 +734,386 @@ async function main() {
     const roundTrippedSoftware = await api(base, '/software');
     assert(roundTrippedSoftware.some(s => s.name === 'FabFilter Pro-Q 3'), 'JSON import lost software licenses');
     console.log('✓ JSON catalog export / replace round-trip');
+
+    const backupRoot = path.join(ROOT, 'data', '.api-smoke-backups');
+    fs.rmSync(backupRoot, { recursive: true, force: true });
+    fs.mkdirSync(backupRoot, { recursive: true });
+    let rejectedInside = false;
+    try {
+      await api(base, '/backup/folder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: DATA_DIR })
+      });
+    } catch {
+      rejectedInside = true;
+    }
+    assert(rejectedInside, 'backup folder inside data should be rejected');
+    await api(base, '/backup/folder', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: backupRoot, keep: 2 })
+    });
+    const first = await api(base, '/backup/folder/run', { method: 'POST' });
+    assert(first.lastPath && fs.existsSync(first.lastPath), 'folder backup file missing');
+    const encBytes = fs.readFileSync(first.lastPath);
+    assert(encBytes.subarray(0, 4).toString('utf8') === 'SIDB', 'folder backup is not an encrypted blob');
+    const { readBackupJson } = require('../lib/folder-backup');
+    const folderBackupJson = await readBackupJson(first.lastPath, { tempDir: path.join(ROOT, 'data') });
+    assert(first.lastPath.endsWith('.zip.enc'), 'folder backup was not encrypted');
+    assert(folderBackupJson?.manifest?.format === 'studio-inventory-full-backup', 'folder backup missing backup.json');
+    const recovery = await api(base, '/backup/recovery-key');
+    assert(Buffer.from(recovery.recoveryKey || '', 'base64').length === 32, 'localhost recovery key is missing');
+    await api(base, '/backup/folder/run', { method: 'POST' });
+    await api(base, '/backup/folder/run', { method: 'POST' });
+    const recoveryCopy = await api(base, '/backup/recovery-copy', { method: 'POST' });
+    assert(recoveryCopy.recoveryReady, 'recovery copy was not recorded');
+    const recoveryFile = path.join(backupRoot, 'studio-inventory-recovery.zip');
+    const firstRecoveryBytes = fs.readFileSync(recoveryFile);
+    assert(firstRecoveryBytes.subarray(0, 2).toString('utf8') === 'PK', 'recovery copy is not a plain ZIP');
+    const { readZipEntry } = require('../lib/folder-backup');
+    assert(await readZipEntry(recoveryFile, 'backup.json'), 'recovery copy missing backup.json');
+    await api(base, '/backup/recovery-copy', { method: 'POST' });
+    const previousRecovery = fs.readFileSync(path.join(backupRoot, 'studio-inventory-recovery-previous.zip'));
+    assert(previousRecovery.equals(firstRecoveryBytes), 'refresh did not keep the previous recovery ZIP');
+    await api(base, '/backup/folder/run', { method: 'POST' });
+    const names = fs.readdirSync(backupRoot).filter(name => name.endsWith('.zip.enc') && !name.includes('-monthly')).sort();
+    assert(names.length === 2, `expected 2 rotated backups, saw ${names.length}: ${fs.readdirSync(backupRoot).join(', ')}`);
+    assert(fs.readdirSync(backupRoot).some(name => name.includes('-monthly')), 'monthly backup was not written');
+    assert(fs.existsSync(recoveryFile), 'rotation deleted the recovery ZIP');
+    assert(fs.existsSync(path.join(backupRoot, 'studio-inventory-recovery-previous.zip')), 'rotation deleted the previous recovery ZIP');
+    const beforeRefusedEncrypt = fs.readFileSync(recoveryFile);
+    let refusedEncrypt = false;
+    try {
+      await api(base, '/backup/encrypt', { method: 'POST' });
+    } catch {
+      refusedEncrypt = true;
+    }
+    assert(refusedEncrypt, 'encrypt ran before the recovery key was typed');
+    assert(fs.readFileSync(recoveryFile).equals(beforeRefusedEncrypt), 'refused encrypt changed the recovery ZIP');
+    let wrongKey = false;
+    try {
+      await api(base, '/backup/recovery-key/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recoveryKey: 'not-the-key' })
+      });
+    } catch (err) {
+      wrongKey = /not the recovery key/i.test(err.message);
+    }
+    assert(wrongKey, 'wrong recovery key was accepted');
+    assert((await api(base, '/backup/folder')).recoveryKeyConfirmed !== true, 'wrong key confirmed the recovery key');
+    const guestBeforeEncrypt = await api(base, '/settings/guest');
+    await api(base, '/backup/recovery-key/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recoveryKey: recovery.recoveryKey })
+    });
+    const encrypted = await api(base, '/backup/encrypt', { method: 'POST' });
+    assert(encrypted.encryptionArmed, 'catalog encryption was not armed');
+    const settingsFile = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'studio-settings.json'), 'utf8'));
+    assert(!settingsFile.guestToken, 'guest token was left in the settings file');
+    assert(!settingsFile.scanLinkSecret, 'QR secret was left in the settings file');
+    assert(!settingsFile.ownerPinHash, 'PIN hash was left in the settings file');
+    const guestAfterEncrypt = await api(base, '/settings/guest');
+    assert(guestAfterEncrypt.guestToken === guestBeforeEncrypt.guestToken, 'encryption lost the guest token');
+    const backupForm = new FormData();
+    backupForm.append('backup', new Blob([fs.readFileSync(path.join(backupRoot, names[names.length - 1]))]), 'backup.zip');
+    const restored = await fetch(`${base}/import/full`, { method: 'POST', body: backupForm });
+    const restoredBody = await restored.json();
+    assert(restored.ok && restoredBody.ok, restoredBody.error || 'folder backup restore failed');
+    const afterRestore = await api(base, `/items/${created.id}`);
+    assert(afterRestore.name === 'Loan Test Mic', 'restored backup lost the item');
+    const failDir = path.join(ROOT, 'data', '.api-smoke-backup-fail');
+    fs.rmSync(failDir, { recursive: true, force: true });
+    fs.mkdirSync(failDir, { recursive: true });
+    await api(base, '/backup/folder', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: failDir, keep: 2 })
+    });
+    const okStatus = await api(base, '/backup/folder/run', { method: 'POST' });
+    fs.rmSync(failDir, { recursive: true, force: true });
+    let failedRun = false;
+    try {
+      await api(base, '/backup/folder/run', { method: 'POST' });
+    } catch {
+      failedRun = true;
+    }
+    assert(failedRun, 'backup to a missing folder should fail');
+    const afterFail = await api(base, '/backup/folder');
+    assert(afterFail.lastError, 'status hid the backup error');
+    assert(afterFail.lastAt === okStatus.lastAt, 'failed backup erased the previous success time');
+    await api(base, '/backup/folder', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: backupRoot, keep: 2 })
+    });
+    console.log('✓ folder backup write, rotate, restore');
+
+    const before = await api(base, '/stats');
+    const guitar = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Sold Test Guitar',
+        category: 'Guitar',
+        serial_number: 'SOLD-123',
+        replacement_value: 500
+      })
+    });
+    const part = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Sold Test Case',
+        category: 'Accessory',
+        parent_item_id: guitar.id,
+        replacement_value: 80
+      })
+    });
+    let rejectedSale = false;
+    try {
+      await api(base, `/items/${guitar.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studio_status: 'sold' })
+      });
+    } catch (err) {
+      rejectedSale = /date/i.test(err.message);
+    }
+    assert(rejectedSale, 'sold gear without a date should be rejected');
+    const sold = await api(base, `/items/${guitar.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studio_status: 'sold',
+        disposition_date: '2026-09-01',
+        studio_status_note: 'Sold to a student'
+      })
+    });
+    assert(sold.studio_status === 'sold', 'sold status not saved');
+    assert(sold.serial_number === 'SOLD-123', 'sold record lost its serial');
+    const soldPart = await api(base, `/items/${part.id}`);
+    assert(soldPart.studio_status === 'sold', 'nested part did not follow the parent');
+    const visible = await api(base, '/items');
+    assert(!visible.some(item => item.id === guitar.id), 'sold guitar still in the default list');
+    const withFormer = await api(base, '/items?include_former=1');
+    assert(withFormer.some(item => item.id === guitar.id), 'sold guitar missing when former gear is requested');
+    const after = await api(base, '/stats');
+    assert(after.totals.total_replacement === before.totals.total_replacement, 'sold gear still counts in the insured total');
+    const soldBackup = await api(base, '/backup/folder/run', { method: 'POST' });
+    const soldForm = new FormData();
+    soldForm.append('backup', new Blob([fs.readFileSync(soldBackup.lastPath)]), 'backup.zip');
+    const soldRestore = await fetch(`${base}/import/full`, { method: 'POST', body: soldForm });
+    const soldRestoreBody = await soldRestore.json();
+    assert(soldRestore.ok && soldRestoreBody.ok, soldRestoreBody.error || 'sold-gear backup restore failed');
+    const restoredSold = await api(base, `/items/${guitar.id}`);
+    assert(restoredSold.studio_status === 'sold' && restoredSold.serial_number === 'SOLD-123', 'restore dropped the sold record');
+    const broughtBack = await api(base, `/items/${guitar.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studio_status: 'in_studio', studio_status_note: '', disposition_date: '' })
+    });
+    assert(broughtBack.studio_status === 'in_studio', 'parent did not return to the studio');
+    const partBack = await api(base, `/items/${part.id}`);
+    assert(partBack.studio_status === 'in_studio', 'cascaded part did not return with the parent');
+    const holdout = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Holdout Parent', category: 'Guitar', replacement_value: 10 })
+    });
+    const holdoutPart = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Holdout Part', category: 'Accessory', parent_item_id: holdout.id })
+    });
+    await api(base, `/items/${holdout.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studio_status: 'stolen', disposition_date: '2026-08-01', studio_status_note: 'Taken from the gig' })
+    });
+    await api(base, `/items/${holdoutPart.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studio_status_note: 'Kept this part' })
+    });
+    await api(base, `/items/${holdout.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studio_status: 'in_studio' })
+    });
+    const holdoutAfter = await api(base, `/items/${holdoutPart.id}`);
+    assert(holdoutAfter.studio_status === 'stolen', 'a part with its own note was restored with the parent');
+    const duplicate = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Erase Me', category: 'Other', replacement_value: 15 })
+    });
+    let blockedDelete = false;
+    try {
+      await api(base, `/items/${duplicate.id}`, { method: 'DELETE' });
+    } catch (err) {
+      blockedDelete = /name|erase|owned/i.test(err.message);
+    }
+    assert(blockedDelete, 'delete without a typed name removed the item');
+    const stillThere = await api(base, `/items/${duplicate.id}`);
+    assert(stillThere.value_events.length >= 1, 'blocked delete destroyed value history');
+    let wrongName = false;
+    try {
+      await api(base, `/items/${duplicate.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ erase: true, confirmName: 'not the name' })
+      });
+    } catch (err) {
+      wrongName = /name|erase|owned/i.test(err.message);
+    }
+    assert(wrongName, 'erase with the wrong name removed the item');
+    await api(base, `/items/${duplicate.id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ erase: true, confirmName: 'Erase Me' })
+    });
+    let erased = false;
+    try {
+      await api(base, `/items/${duplicate.id}`);
+    } catch (err) {
+      erased = /404/.test(err.message);
+    }
+    assert(erased, 'erase with the item name left the duplicate in place');
+    const { insurancePdfTables } = await import('../public/js/lib/insurance-rows.mjs');
+    const tables = insurancePdfTables([
+      {
+        name: 'Kept', brand: 'A', model: 'B', serial_number: '1', location: 'Rack', condition: 'Good',
+        purchase_price: 10, replacement_value: 20, quantity: 1, studio_status: 'in_studio',
+        value_updated_at: '2026-01-02', receipts: [{}]
+      },
+      {
+        name: 'Gone', brand: 'C', model: 'D', serial_number: '2', location: 'Should not be the date column',
+        studio_status: 'sold', disposition_date: '2026-09-01', studio_status_note: 'Student', purchase_price: 5
+      }
+    ]);
+    assert(tables.formerHeaders[4] === 'Status', 'former PDF reused the location column');
+    assert(tables.formerRows[0][4] === 'sold' && tables.formerRows[0][5] === '2026-09-01', 'former PDF put the sold date in the wrong column');
+    assert(!tables.formerHeaders.includes('Location'), 'former PDF still has a location column');
+    assert(tables.ownedRows[0].at(-1) === 'Yes', 'owned PDF did not say a receipt is on file');
+    const labeled = insurancePdfTables([
+      {
+        name: 'Old', studio_status: 'in_studio', replacement_value: 1, quantity: 1,
+        latest_value_event: { note: 'Opening snapshot', recorded_at: '2024-05-01' }
+      },
+      {
+        name: 'New', studio_status: 'in_studio', replacement_value: 1, quantity: 1,
+        latest_value_event: { note: 'Reverb avg', recorded_at: '2026-09-01' }
+      }
+    ]);
+    assert(String(labeled.ownedRows[0][8]).includes('not an appraisal'), 'opening snapshot was presented as an appraisal');
+    assert(!String(labeled.ownedRows[1][8]).includes('not an appraisal'), 'a real value note was labeled as a snapshot');
+    console.log('✓ former gear stays recorded and leaves the insured total');
+
+    const valued = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Value History Amp',
+        category: 'Amplifier',
+        serial_number: 'AMP-1',
+        replacement_value: 400,
+        replacement_value_note: 'First listing'
+      })
+    });
+    const firstEvents = (await api(base, `/items/${valued.id}`)).value_events;
+    assert(firstEvents.length === 1 && firstEvents[0].amount === 400, 'first save did not record a value');
+    await api(base, `/items/${valued.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        replacement_value: 450,
+        replacement_value_note: 'Reverb avg',
+        serial_number: 'AMP-2'
+      })
+    });
+    const traced = await api(base, `/items/${valued.id}`);
+    assert(traced.value_events.length === 2, 'second value edit did not append history');
+    assert(traced.value_events[0].amount === 450 && traced.value_events[0].note === 'Reverb avg', 'latest value event is wrong');
+    assert(traced.audit.some(entry => entry.field === 'serial_number' && entry.new_value === 'AMP-2'), 'serial change was not audited');
+    const historyBackup = await api(base, '/backup/folder/run', { method: 'POST' });
+    const historyForm = new FormData();
+    historyForm.append('backup', new Blob([fs.readFileSync(historyBackup.lastPath)]), 'backup.zip');
+    const historyRestore = await fetch(`${base}/import/full`, { method: 'POST', body: historyForm });
+    const historyRestoreBody = await historyRestore.json();
+    assert(historyRestore.ok && historyRestoreBody.ok, historyRestoreBody.error || 'history backup restore failed');
+    const restoredHistory = await api(base, `/items/${valued.id}`);
+    assert(restoredHistory.value_events.length === 2, 'restore lost value history');
+    assert(restoredHistory.audit.some(entry => entry.field === 'serial_number'), 'restore lost the audit log');
+    const splitBefore = await api(base, '/stats');
+    const kit = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Split Kit', category: 'Guitar', replacement_value: 100 })
+    });
+    await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Split Pedal', category: 'Pedal', parent_item_id: kit.id, replacement_value: 25 })
+    });
+    const splitAfter = await api(base, '/stats');
+    assert(splitAfter.totals.top_level_replacement - splitBefore.totals.top_level_replacement === 100, 'top-level total did not count the kit');
+    assert(splitAfter.totals.nested_replacement - splitBefore.totals.nested_replacement === 25, 'nested total did not count the part');
+    assert(splitAfter.totals.total_replacement - splitBefore.totals.total_replacement === 125, 'headline total dropped a nested part');
+    console.log('✓ value history and audit survive backup');
+
+    const doomed = await api(base, '/software', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Delete Me Plugin', publisher: 'Test', license_key: 'SECRET' })
+    });
+    let blockedSoftware = false;
+    try {
+      await api(base, `/software/${doomed.id}`, { method: 'DELETE' });
+    } catch (err) {
+      blockedSoftware = /name/i.test(err.message);
+    }
+    assert(blockedSoftware, 'software delete without the name removed the license');
+    assert((await api(base, '/software')).some(entry => entry.id === doomed.id), 'blocked software delete removed the license');
+    await api(base, `/software/${doomed.id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ erase: true, confirmName: 'Delete Me Plugin' })
+    });
+    assert(!(await api(base, '/software')).some(entry => entry.id === doomed.id), 'named software delete left the license');
+
+    const phraseItem = await api(base, '/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Phrase Keep', category: 'Other', replacement_value: 30 })
+    });
+    let blockedReplace = false;
+    try {
+      await api(base, '/import/json', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [], replace: true })
+      });
+    } catch (err) {
+      blockedReplace = /replace the catalog/i.test(err.message);
+    }
+    assert(blockedReplace, 'JSON replace without the phrase wiped the catalog');
+    assert((await api(base, `/items/${phraseItem.id}`)).value_events.length >= 1, 'refused replace destroyed value history');
+    await api(base, '/import/json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [], replace: true, confirmPhrase: 'replace the catalog' })
+    });
+    let phraseGone = false;
+    try {
+      await api(base, `/items/${phraseItem.id}`);
+    } catch (err) {
+      phraseGone = /404/.test(err.message);
+    }
+    assert(phraseGone, 'typed phrase did not replace the catalog');
+    console.log('✓ replace and software delete require the typed words');
 
     console.log('\nExtended API smoke test passed.');
   } finally {

@@ -1,5 +1,26 @@
 import { escapeHtml, formatDate, fileUrl } from '../utils.js';
 
+/**
+ * Manual text comes from PDFs, which can say anything. Escape it all, then turn
+ * the server's match markers (\u0002 … \u0003) into <mark> highlighting.
+ */
+function snippetHtml(snippet) {
+  return escapeHtml(String(snippet || ''))
+    .replace(/\u0002/g, '<mark>')
+    .replace(/\u0003/g, '</mark>');
+}
+
+const DOCUMENT_KIND_BUTTONS = [
+  ['all', 'All manuals'],
+  ['user', 'User manual'],
+  ['service', 'Service manual'],
+  ['quickstart', 'Quick start'],
+  ['spec', 'Spec sheet'],
+  ['schematic', 'Schematic'],
+  ['warranty', 'Warranty'],
+  ['other', 'Other']
+];
+
 export function renderManuals(manuals, {
   searchQuery = '',
   ftsQuery = '',
@@ -20,7 +41,7 @@ export function renderManuals(manuals, {
     !q || String(m.original_name || '').toLowerCase().includes(q) || String(m.item_name || '').toLowerCase().includes(q)
   );
   const missingManualItems = items.filter(item => !(item.manuals || []).length);
-  const missingFiltered = missingManualItems.filter(itemMatches);
+  const lookupItems = items.filter(itemMatches);
 
   return `
     <h2 class="page-title">Manuals &amp; Documents</h2>
@@ -59,18 +80,18 @@ export function renderManuals(manuals, {
         <div class="card-header">
           <h3 class="section-title">Find Manuals Online</h3>
         </div>
-        <p class="text-muted-sm manual-finder-help">Curated online results are shown here inside Studio Inventory. Direct PDF/manual links can be saved straight to the selected item.</p>
+        <p class="text-muted-sm manual-finder-help">Looks up manuals first, and can also fetch a spec sheet, schematic, warranty, or other public document. Each download is added to that gear record. An item can hold more than one file. A browser is only a fallback when a site refuses the download.</p>
         ${renderManualInboxPanel(inbox)}
-        ${missingFiltered.length ? `
+        ${lookupItems.length ? `
           <div class="manual-finder-list">
-            ${missingFiltered.map(item => `
+            ${lookupItems.map(item => `
               <div class="manual-finder-row">
                 <div class="manual-finder-info">
                   <strong>${escapeHtml(item.name)}</strong>
-                  <span class="text-muted-sm">${escapeHtml([item.brand, item.model, item.year].filter(Boolean).join(' · ') || item.category || 'Inventory item')}</span>
+                  <span class="text-muted-sm">${escapeHtml([item.brand, item.model, item.year].filter(Boolean).join(' · ') || item.category || 'Inventory item')} · ${(item.manuals || []).length ? `${item.manuals.length} document${item.manuals.length === 1 ? '' : 's'} on file` : 'No documents yet'}</span>
                 </div>
                 <div class="btn-group">
-                  <button type="button" class="btn btn-sm btn-primary" data-action="manual-web-search" data-id="${item.id}" data-name="${escapeHtml(item.name)}">Find Online</button>
+                  <button type="button" class="btn btn-sm btn-primary" data-action="manual-web-search" data-id="${item.id}" data-name="${escapeHtml(item.name)}">Find documents</button>
                   <button type="button" class="btn btn-sm btn-secondary" data-action="manual-inbox-import" data-id="${item.id}" data-name="${escapeHtml(item.name)}">Import from Inbox</button>
                   <button type="button" class="btn btn-sm btn-secondary" data-action="archive-manual-url" data-id="${item.id}" data-name="${escapeHtml(item.name)}">Save from URL</button>
                   <button type="button" class="btn btn-sm btn-ghost" data-action="view-item" data-id="${item.id}">View Item</button>
@@ -80,7 +101,7 @@ export function renderManuals(manuals, {
           </div>
           ${renderManualFinderResults(items, finder)}
         ` : `
-          <p class="text-muted">${q ? 'No manual lookup candidates match this search.' : 'Every item already has a manual or document attached.'}</p>
+          <p class="text-muted">${q ? 'No gear matches this search.' : 'No gear to attach documents to.'}</p>
         `}
       </div>
     ` : ''}
@@ -153,8 +174,13 @@ function renderManualFinderResults(items, finder = {}) {
           <h4>Results for ${escapeHtml(item.name)}</h4>
           <p class="text-muted-sm">${escapeHtml(finder.query || [item.brand, item.model, item.name].filter(Boolean).join(' '))}</p>
         </div>
+        <div class="btn-group" style="margin:0.5rem 0">
+          ${DOCUMENT_KIND_BUTTONS.map(([kind, label]) => `
+            <button type="button" class="btn btn-sm ${finder.kind === kind ? 'btn-primary' : 'btn-secondary'}" data-action="manual-web-search-kind" data-kind="${kind}" data-id="${item.id}" data-name="${escapeHtml(item.name)}">${label}</button>
+          `).join('')}
+        </div>
         <div class="manual-web-search-row">
-          <input type="search" id="manual-web-query" value="${escapeHtml(finder.query || '')}" placeholder="Refine manual search">
+          <input type="search" id="manual-web-query" value="${escapeHtml(finder.query || '')}" placeholder="Or type a narrower search">
           <button type="button" class="btn btn-sm btn-primary" data-action="manual-web-search-go" data-id="${item.id}" data-name="${escapeHtml(item.name)}">Search</button>
         </div>
       </div>
@@ -162,25 +188,26 @@ function renderManualFinderResults(items, finder = {}) {
       ${results.length ? `
         <div class="manual-web-list">
           ${results.map(result => {
-    const candidates = scans[result.url];
+    const candidates = result.files || scans[result.url];
+    const downloadUrl = result.downloadUrl || (result.isPdf ? result.url : '');
     return `
               <div class="manual-web-result">
                 <div class="manual-web-result-main">
                   <strong>${escapeHtml(result.title || result.url)}</strong>
-                  <span class="text-muted-sm">${escapeHtml(result.displayUrl || result.url)}</span>
+                  <span class="text-muted-sm">${escapeHtml(result.kindLabel || 'Document')} · ${escapeHtml(result.displayUrl || result.url)}</span>
                   ${result.snippet ? `<p class="text-muted-sm">${escapeHtml(result.snippet)}</p>` : ''}
                 </div>
                 <div class="btn-group">
-                  ${result.isPdf
-        ? `<button type="button" class="btn btn-sm btn-primary" data-action="archive-manual-result" data-id="${finder.itemId}" data-url="${escapeHtml(result.url)}">Save to Item</button>`
-        : `<button type="button" class="btn btn-sm btn-secondary" data-action="scan-manual-result" data-id="${finder.itemId}" data-url="${escapeHtml(result.url)}">Scan for PDFs</button>`}
+                  ${downloadUrl
+        ? `<button type="button" class="btn btn-sm btn-primary" data-action="archive-manual-result" data-id="${finder.itemId}" data-url="${escapeHtml(downloadUrl)}" data-description="${escapeHtml(result.kindLabel || 'Document')}">Download to this item</button>`
+        : `<button type="button" class="btn btn-sm btn-secondary" data-action="scan-manual-result" data-id="${finder.itemId}" data-url="${escapeHtml(result.url)}">Find the PDF on this page</button>`}
                 </div>
                 ${Array.isArray(candidates) ? renderManualCandidates(finder.itemId, candidates) : ''}
               </div>
             `;
   }).join('')}
         </div>
-      ` : `<p class="text-muted">${finder.searched ? 'No search results found. Try a shorter model number or manufacturer name.' : 'Choose Find Online on an item above.'}</p>`}
+      ` : `<p class="text-muted">${finder.searched ? 'No public document turned up. Try another type, or paste a direct PDF link.' : 'Choose Find documents on an item above.'}</p>`}
     </div>
   `;
 }
@@ -193,8 +220,8 @@ function renderManualCandidates(itemId, candidates) {
     <div class="manual-web-candidates">
       ${candidates.map(c => `
         <div class="manual-web-candidate">
-          <span>${escapeHtml(c.title || c.displayUrl || c.url)}</span>
-          <button type="button" class="btn btn-sm btn-primary" data-action="archive-manual-result" data-id="${itemId}" data-url="${escapeHtml(c.url)}">Save to Item</button>
+          <span>${escapeHtml(c.kindLabel ? `${c.kindLabel}: ` : '')}${escapeHtml(c.title || c.displayUrl || c.url)}</span>
+          <button type="button" class="btn btn-sm btn-primary" data-action="archive-manual-result" data-id="${itemId}" data-url="${escapeHtml(c.url)}" data-description="${escapeHtml(c.kindLabel || 'Document')}">Download to this item</button>
         </div>
       `).join('')}
     </div>
@@ -217,7 +244,7 @@ function renderFtsResults(results, query) {
             <strong>${escapeHtml(r.file_name)}</strong>
             <span class="text-muted-sm">on ${escapeHtml(r.item_name)}</span>
           </div>
-          <p class="manual-fts-snippet">${r.snippet}</p>
+          <p class="manual-fts-snippet">${snippetHtml(r.snippet)}</p>
           <div class="btn-group">
             <button type="button" class="btn btn-sm btn-ghost" data-action="view-item" data-id="${r.item_id}">View Item</button>
             <a href="${fileUrl(r.relative_path)}" target="_blank" class="btn btn-sm btn-primary">Open PDF</a>

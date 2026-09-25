@@ -1,27 +1,50 @@
 const API = '/api';
-const OWNER_TOKEN_KEY = 'studio-owner-token';
+// Ordinary requests give up after two minutes. Uploads, restores, backups and
+// downloads onto the studio computer pass NO_TIMEOUT: the server has its own limits.
+const DEFAULT_TIMEOUT_MS = 120000;
+const NO_TIMEOUT = 0;
 
-function ownerToken() {
-  // v2.6+ uses an HttpOnly same-site cookie so scripts cannot read the session.
-  return '';
-}
-
-function setOwnerToken() {
-  localStorage.removeItem(OWNER_TOKEN_KEY);
-}
-
-function withOwnerHeaders(options = {}) {
-  return options;
-}
+// Before v2.6 a token was kept in localStorage; the session is now an HttpOnly cookie.
+try { localStorage.removeItem('studio-owner-token'); } catch { /* storage blocked */ }
 
 function downloadUrl(path) {
   return `${API}${path}`;
 }
 
+let ownerAuthHandler = null;
+let ownerAuthPrompt = null;
+
+/** Called when a request finds the owner session has ended; resolves true once signed in again. */
+function onOwnerAuthRequired(handler) {
+  ownerAuthHandler = handler;
+}
+
+function requestSignal(signal, timeoutMs) {
+  const signals = [signal];
+  if (timeoutMs && typeof AbortSignal.timeout === 'function') signals.push(AbortSignal.timeout(timeoutMs));
+  const active = signals.filter(Boolean);
+  if (active.length <= 1) return active[0];
+  return typeof AbortSignal.any === 'function' ? AbortSignal.any(active) : active[0];
+}
+
 async function request(path, options = {}) {
-  const res = await fetch(`${API}${path}`, withOwnerHeaders(options));
+  const { timeoutMs = options.body instanceof FormData ? NO_TIMEOUT : DEFAULT_TIMEOUT_MS, retried = false, ...fetchOptions } = options;
+  fetchOptions.signal = requestSignal(fetchOptions.signal, timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${API}${path}`, fetchOptions);
+  } catch (err) {
+    if (err?.name === 'AbortError' && options.signal?.aborted) throw err; // cancelled on purpose
+    if (err?.name === 'TimeoutError') throw new Error('The studio computer took too long to answer. Try again.');
+    throw new Error("Can't reach Studio Inventory. Check that the studio computer is on and the app is running.");
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
+    if (res.status === 401 && err.ownerAuthRequired && ownerAuthHandler && !retried && !path.startsWith('/auth/')) {
+      // Sign in once (shared by every request waiting on it), then try again.
+      ownerAuthPrompt ||= Promise.resolve(ownerAuthHandler()).finally(() => { ownerAuthPrompt = null; });
+      if (await ownerAuthPrompt) return request(path, { ...options, retried: true });
+    }
     const out = new Error(err.error || `Request failed (${res.status})`);
     Object.assign(out, err, { status: res.status });
     throw out;
@@ -32,8 +55,7 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  ownerToken,
-  setOwnerToken,
+  onOwnerAuthRequired,
   health: () => request('/health'),
   authStatus: () => request('/auth/status'),
   setupOwnerPin: async (pin) => {
@@ -42,7 +64,6 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin })
     });
-    setOwnerToken();
     return result;
   },
   ownerLogin: async (pin) => {
@@ -51,10 +72,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin })
     });
-    setOwnerToken();
     return result;
   },
-  updateCheck: () => request('/update-check'),
+  updateCheck: (force = false) => request(`/update-check${force ? '?force=1' : ''}`),
   stats: () => request('/stats'),
   meta: () => request('/meta'),
   items: (params = {}) => {
@@ -66,26 +86,33 @@ export const api = {
   photoLink: (id, baseUrl = '') => request(`/items/${id}/photo-link${baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : ''}`),
   createItem: (data) => request('/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   updateItem: (id, data) => request(`/items/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
-  deleteItem: (id) => request(`/items/${id}`, { method: 'DELETE' }),
+  deleteItem: (id, { erase = false, confirmName = '' } = {}) => request(`/items/${id}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ erase, confirmName })
+  }),
   uploadPhotos: (itemId, files) => {
     const fd = new FormData();
     for (const f of files) fd.append('files', f);
     return request(`/items/${itemId}/photos`, { method: 'POST', body: fd });
   },
-  uploadManual: (itemId, file) => {
+  uploadManual: (itemId, fileOrFiles) => {
     const fd = new FormData();
-    fd.append('file', file);
+    const list = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
+    const field = list.length > 1 ? 'files' : 'file';
+    for (const file of list) fd.append(field, file);
     return request(`/items/${itemId}/manuals`, { method: 'POST', body: fd });
   },
   archiveManual: (itemId, url, description = '') => request(`/items/${itemId}/manuals/archive`, {
+    timeoutMs: NO_TIMEOUT,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, description })
   }),
-  findManualsOnline: (itemId, query = '') => request(`/items/${itemId}/manuals/web-search`, {
+  findManualsOnline: (itemId, query = '', kind = 'all') => request(`/items/${itemId}/manuals/web-search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query })
+    body: JSON.stringify({ query, kind })
   }),
   discoverManualLinks: (itemId, url) => request(`/items/${itemId}/manuals/discover`, {
     method: 'POST',
@@ -106,6 +133,7 @@ export const api = {
     return request(`/items/${itemId}/software/upload`, { method: 'POST', body: fd });
   },
   archiveSoftware: (itemId, url, version, description) => request(`/items/${itemId}/software/archive`, {
+    timeoutMs: NO_TIMEOUT,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, version, description })
@@ -114,7 +142,7 @@ export const api = {
   brands: () => request('/brands'),
   brand: (name) => request(`/brands/${encodeURIComponent(name)}`),
   fetchBrandLogo: (name, force = false) => request(`/brands/${encodeURIComponent(name)}/fetch-logo${force ? '?force=1' : ''}`, { method: 'POST' }),
-  fetchAllBrandLogos: (force = false) => request(`/brands/fetch-all${force ? '?force=1' : ''}`, { method: 'POST' }),
+  fetchAllBrandLogos: (force = false) => request(`/brands/fetch-all${force ? '?force=1' : ''}`, { method: 'POST', timeoutMs: NO_TIMEOUT }),
   uploadBrandLogo: (name, file) => {
     const fd = new FormData();
     fd.append('name', name);
@@ -122,6 +150,9 @@ export const api = {
     return request('/brands/logo', { method: 'POST', body: fd });
   },
   manuals: () => request('/manuals'),
+  serverLog: () => request('/logs'),
+  shutdown: () => request('/shutdown', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+  openServerLog: () => request('/logs/open', { method: 'POST' }),
   manualInbox: () => request('/manual-inbox'),
   openManualInbox: () => request('/manual-inbox/open', { method: 'POST' }),
   importManualFromInbox: (itemId, filename) => request(`/items/${itemId}/manuals/import-inbox`, {
@@ -131,6 +162,22 @@ export const api = {
   }),
   documents: () => request('/documents'),
   exportFullBackup: () => window.open(downloadUrl('/export/full'), '_blank'),
+  backupFolder: () => request('/backup/folder'),
+  setBackupFolder: (dir, keep) => request('/backup/folder', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dir, keep })
+  }),
+  runFolderBackup: () => request('/backup/folder/run', { method: 'POST', timeoutMs: NO_TIMEOUT }),
+  refreshRecoveryCopy: () => request('/backup/recovery-copy', { method: 'POST', timeoutMs: NO_TIMEOUT }),
+  recoveryKey: () => request('/backup/recovery-key'),
+  confirmRecoveryKey: (recoveryKey) => request('/backup/recovery-key/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recoveryKey })
+  }),
+  moveBackupLeftovers: () => request('/backup/move-leftovers', { method: 'POST' }),
+  encryptCatalog: () => request('/backup/encrypt', { method: 'POST', timeoutMs: NO_TIMEOUT }),
   exportJson: () => window.open(downloadUrl('/export/json'), '_blank'),
   exportSql: () => window.open(downloadUrl('/export/sql'), '_blank'),
   exportCsv: (params = {}) => {
@@ -142,13 +189,15 @@ export const api = {
     fd.append('backup', file);
     return request('/import/full', { method: 'POST', body: fd });
   },
-  importJson: (data, replace = false) => request('/import/json', {
+  importJson: (data, replace = false, confirmPhrase = '') => request('/import/json', {
+    timeoutMs: NO_TIMEOUT,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       items: data.items || data,
       software_licenses: Array.isArray(data.software_licenses) ? data.software_licenses : undefined,
-      replace
+      replace,
+      confirmPhrase
     })
   }),
   importCsv: (csvText) => request('/import/csv', {
@@ -183,11 +232,13 @@ export const api = {
   createSignalChain: (data) => request('/signal-chains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   deleteSignalChain: (id) => request(`/signal-chains/${id}`, { method: 'DELETE' }),
   setSignalChainItems: (id, items) => request(`/signal-chains/${id}/items`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) }),
+  brandLogoSettings: () => request('/settings/brand-logos'),
+  updateBrandLogoSettings: (lookups) => request('/settings/brand-logos', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lookups: !!lookups }) }),
   guestSettings: () => request('/settings/guest'),
   updateGuestSettings: (data) => request('/settings/guest', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   regenerateGuestToken: () => request('/settings/guest/regenerate', { method: 'POST' }),
   searchManuals: (q) => request(`/manuals/search?q=${encodeURIComponent(q)}`),
-  reindexManuals: () => request('/manuals/reindex', { method: 'POST' }),
+  reindexManuals: () => request('/manuals/reindex', { method: 'POST', timeoutMs: NO_TIMEOUT }),
   lookup: (code) => request(`/lookup?code=${encodeURIComponent(code)}`),
   scanLabel: (file) => {
     const fd = new FormData();
@@ -254,7 +305,11 @@ export const api = {
   softwareItem: (id) => request(`/software/${id}`),
   createSoftware: (data) => request('/software', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
   updateSoftware: (id, data) => request(`/software/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
-  deleteSoftware: (id) => request(`/software/${id}`, { method: 'DELETE' }),
+  deleteSoftware: (id, { erase = false, confirmName = '' } = {}) => request(`/software/${id}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ erase, confirmName })
+  }),
   uploadSoftwareScreenshot: (id, file) => {
     const fd = new FormData();
     fd.append('screenshot', file);

@@ -37,34 +37,83 @@ if [[ -z "$TARGET" || "$TARGET" == "/" || "$TARGET" == "$HOME" ]]; then
   exit 2
 fi
 
-BACKUP_ROOT="$(mktemp -d)"
-DATA_BACKUP="$BACKUP_ROOT/data"
-cleanup() {
-  rm -rf -- "$BACKUP_ROOT"
-}
-trap cleanup EXIT
-
 echo "Studio Inventory — Linux installer"
 echo "Installing to: $TARGET"
 
-if [[ "$SOURCE" != "$TARGET" && -d "$TARGET/data" ]]; then
-  echo "Backing up your inventory data…"
-  cp -a -- "$TARGET/data" "$DATA_BACKUP"
-fi
-
+# Updates never copy or delete data/: the new version is copied next to the
+# install first, then the install is renamed aside and data/ is moved (renamed)
+# into the new version. Any failure puts the previous install back.
 if [[ "$SOURCE" != "$TARGET" ]]; then
-  if [[ -d "$TARGET" ]]; then
-    echo "Updating existing install…"
-    rm -rf -- "$TARGET"
+  case "$SOURCE/" in
+    "$TARGET/"*)
+      echo "Run the installer from the extracted download, not from inside $TARGET." >&2
+      exit 2
+      ;;
+  esac
+
+  running_root="$(curl -fsS --max-time 2 http://127.0.0.1:3847/api/health 2>/dev/null \
+    | sed -n 's/.*"appRoot":"\([^"]*\)".*/\1/p' || true)"
+  if [[ -n "$running_root" && "$(realpath -m "$running_root")" == "$TARGET" ]]; then
+    echo "Studio Inventory is running from $TARGET." >&2
+    echo "Stop it first (press Ctrl+C in its terminal window), then run the installer again." >&2
+    exit 1
   fi
 
-  mkdir -p -- "$TARGET"
-  cp -a -- "$SOURCE/." "$TARGET/"
+  STAMP="$(date +%Y%m%d-%H%M%S)"
+  STAGING="$TARGET.installing-$STAMP"
+  PREVIOUS="$TARGET.previous-$STAMP"
+  STAGED=0
+  SET_ASIDE=0
+  FINISHED=0
 
-  if [[ -d "$DATA_BACKUP" ]]; then
-    echo "Restoring your inventory data…"
-    rm -rf -- "$TARGET/data"
-    cp -a -- "$DATA_BACKUP" "$TARGET/data"
+  rollback() {
+    [[ "$FINISHED" -eq 1 ]] && return
+    echo "The install did not finish; putting the previous version back…" >&2
+    if [[ "$SET_ASIDE" -eq 1 ]]; then
+      if [[ ! -d "$PREVIOUS/data" && -d "$STAGING/data" ]]; then
+        mv -T -- "$STAGING/data" "$PREVIOUS/data" || {
+          echo "Your inventory data was not deleted. It is in: $STAGING/data" >&2
+          return
+        }
+      fi
+      if [[ ! -e "$TARGET" ]]; then
+        mv -T -- "$PREVIOUS" "$TARGET" || {
+          echo "Your previous install, with your inventory data, is in: $PREVIOUS" >&2
+          return
+        }
+      else
+        echo "Your previous install, with your inventory data, is in: $PREVIOUS" >&2
+        return
+      fi
+    fi
+    [[ "$STAGED" -eq 1 ]] && rm -rf -- "$STAGING"
+    echo "Nothing was changed." >&2
+  }
+  trap rollback EXIT
+  trap 'exit 130' INT TERM
+
+  mkdir -p -- "$(dirname "$TARGET")"
+  echo "Copying Studio Inventory files…"
+  mkdir -- "$STAGING"
+  STAGED=1
+  cp -a -- "$SOURCE/." "$STAGING/"
+
+  if [[ -d "$TARGET" ]]; then
+    echo "Updating existing install…"
+    mv -T -- "$TARGET" "$PREVIOUS"
+    SET_ASIDE=1
+    if [[ -d "$PREVIOUS/data" ]]; then
+      echo "Moving your inventory data into the new version…"
+      rm -rf -- "$STAGING/data"
+      mv -T -- "$PREVIOUS/data" "$STAGING/data"
+    fi
+  fi
+
+  mv -T -- "$STAGING" "$TARGET"
+  FINISHED=1
+  trap - EXIT INT TERM
+  if [[ "$SET_ASIDE" -eq 1 ]]; then
+    rm -rf -- "$PREVIOUS" || true
   fi
 fi
 

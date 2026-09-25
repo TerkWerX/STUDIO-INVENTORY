@@ -48,8 +48,13 @@ function renderList(items) {
 
   root.querySelectorAll('.guest-row').forEach(row => {
     row.addEventListener('click', async () => {
-      const item = await api(`/items/${row.dataset.id}`);
-      showDetail(item);
+      try {
+        showDetail(await api(`/items/${row.dataset.id}`));
+      } catch (err) {
+        const el = document.getElementById('guest-detail');
+        el.classList.remove('hidden');
+        el.innerHTML = `<p class="text-muted">Could not load this item: ${escapeHtml(err.message || 'try again')}</p>`;
+      }
     });
   });
 }

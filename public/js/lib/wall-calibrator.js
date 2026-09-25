@@ -236,7 +236,8 @@ export function openWallCalibrator({
   });
 
   overlay.querySelectorAll('.wall-calibrator-close').forEach(btn => btn.addEventListener('click', close));
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  // Assigned, not added: the overlay is reused, and each open replaces the previous handler.
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
 
   function close() {
     overlay.dispatchEvent(new Event('wall-calibrator-close'));
@@ -261,7 +262,7 @@ export function openWallCalibrator({
   window.addEventListener('resize', onLayout);
   overlay.addEventListener('wall-calibrator-close', () => {
     window.removeEventListener('resize', onLayout);
-  });
+  }, { once: true });
 
   overlay.classList.remove('hidden');
   requestAnimationFrame(onLayout);

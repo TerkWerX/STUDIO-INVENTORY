@@ -21,9 +21,19 @@ data/.browser-smoke-test/
 data/.loan-test/
 data/.api-test/
 data/.guest-debug*/
+data/.api-smoke-*/
+data/.browser-smoke-*/
+data/.security-smoke-*/
 data/studio-settings.json
+data/studio-settings.json.*
+data/studio-settings.unreadable-*.json
 photos/
 scripts/wall-screenshots/
 scripts/wall-browse-check.js
 scripts/wall-view-debug*.js
 scripts/wall-view-screenshot.js
+data/.robustness-smoke-*/
+data/logs/
+
+# Files Claude hands over for copying (not part of the app)
+Claude outputs/

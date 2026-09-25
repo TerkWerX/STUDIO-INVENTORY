@@ -11,6 +11,7 @@ const ROOT = path.join(__dirname, '..');
 const PORT = process.env.BROWSER_SMOKE_PORT || 3853;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DATA_DIR = path.join(ROOT, 'data', '.browser-smoke-test');
+const KEY_DIR = path.join(ROOT, 'data', '.browser-smoke-keys');
 const BROWSER_ENGINE = process.env.BROWSER_ENGINE || 'chromium';
 
 function assert(cond, msg) {
@@ -36,8 +37,10 @@ async function seedAndStartServer() {
     try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* win lock */ }
   }
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.rmSync(KEY_DIR, { recursive: true, force: true });
+  fs.mkdirSync(KEY_DIR, { recursive: true });
 
-  const env = { ...process.env, PORT: String(PORT), STUDIO_DATA_DIR: DATA_DIR };
+  const env = { ...process.env, PORT: String(PORT), STUDIO_DATA_DIR: DATA_DIR, STUDIO_KEY_DIR: KEY_DIR, STUDIO_SKIP_AUTO_BACKUP: '1' };
   await new Promise((resolve, reject) => {
     const seed = spawn('node', ['seed.js', '--force'], { cwd: ROOT, env, stdio: 'inherit' });
     seed.on('close', c => (c === 0 ? resolve() : reject(new Error('seed failed'))));
@@ -158,13 +161,51 @@ async function main() {
           calibrated: true
         })
       });
+      const created = await fetch('/api/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Pin Test Mic',
+          category: 'Microphone',
+          location: fp.location,
+          replacement_value: 10
+        })
+      }).then(r => r.json());
+      await fetch(`/api/floorplans/${fp.id}/items`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{ item_id: created.id, x_pct: 20, y_pct: 20, placement: 'floor', icon_mode: 'logo' }]
+        })
+      });
       return fp.id;
     });
     assert(fpId, 'floorplan id for studio view wall test');
 
     await navTo(page, 'studio-view', '.studio-browse');
     await page.selectOption('#studio-browse-room', String(fpId));
-    await page.waitForSelector(`[data-studio-browse-fp="${fpId}"]`, { timeout: 10000 });
+    await page.waitForSelector(`[data-studio-browse-fp="${fpId}"] .studio-browse-pin`, { timeout: 10000 });
+    await page.evaluate(() => {
+      const map = document.getElementById('studio-browse-map');
+      map.style.width = '800px';
+      map.style.height = '360px';
+    });
+    await page.waitForTimeout(80);
+    const pinCheck = await page.evaluate(() => {
+      const pin = document.querySelector('.studio-browse-pin');
+      const poly = document.querySelector('.floorplan-room-fill');
+      const pinBox = pin.getBoundingClientRect();
+      const polyBox = poly.getBoundingClientRect();
+      const cx = pinBox.left + pinBox.width / 2;
+      const cy = pinBox.top + pinBox.height / 2;
+      return {
+        inside: cx >= polyBox.left && cx <= polyBox.right && cy >= polyBox.top && cy <= polyBox.bottom,
+        cx, cy,
+        polyLeft: polyBox.left, polyRight: polyBox.right, polyTop: polyBox.top, polyBottom: polyBox.bottom
+      };
+    });
+    assert(pinCheck.inside, `studio pin landed outside the room (${JSON.stringify(pinCheck)})`);
+    console.log('✓ studio view pin stays inside the room');
     await page.click('[data-studio-wall="0"]');
     await page.waitForSelector('#wall-elevation-overlay:not(.hidden)', { timeout: 20000 });
     await page.waitForFunction(() => {
@@ -230,7 +271,7 @@ async function main() {
     console.log('✓ backup / guest settings');
 
     await navTo(page, 'item-form', '#item-form');
-    assert(await page.locator('#depreciated_value').count() === 1, 'depreciated field missing on form');
+    assert(await page.locator('#depreciated_value').count() === 0, 'depreciated field should stay off the form');
     assert(await page.locator('#parent_item_id').count() === 1, 'parent item field missing');
     assert(await page.locator('#on_insurance_policy').count() === 1, 'insurance flag missing');
     assert(await page.locator('#label-scan-file').count() === 1, 'label scan input missing');
@@ -246,6 +287,76 @@ async function main() {
     assert(await page.locator('#instrument-spec-compatibility_status').count() === 1, 'mount compatibility field missing');
     assert(await page.locator('#instrument-spec-adapter_chain').count() === 1, 'mount adapter chain field missing');
     console.log('✓ item form smart profiles');
+
+    // Leaving a form with unsaved edits asks first; "Keep editing" stays put.
+    await page.fill('#name', 'Unsaved draft');
+    await page.click('.nav-btn[data-view="dashboard"]');
+    await page.waitForSelector('#modal-overlay:not(.hidden)', { timeout: 5000 });
+    assert((await page.textContent('#modal-title')).includes('Discard'), 'leaving a changed form did not warn');
+    await page.click('#modal-cancel');
+    assert(await page.locator('#item-form').count() === 1, 'Keep editing left the form');
+    assert(await page.inputValue('#name') === 'Unsaved draft', 'the draft was lost');
+    console.log('✓ unsaved form edits are protected');
+
+    // A double click on "Add Item" saves one item, and Escape answers the follow-up questions.
+    const doubleName = `Double click check ${Date.now()}`;
+    await page.fill('#name', doubleName);
+    await page.locator('#item-form button[type="submit"]').dblclick();
+    await page.waitForSelector('#modal-overlay:not(.hidden)', { timeout: 10000 });
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => /cutout/i.test(document.getElementById('modal-title')?.textContent || '')
+      && !document.getElementById('modal-overlay').classList.contains('hidden'), null, { timeout: 5000 });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[data-action="edit-item"]', { timeout: 10000 });
+    const saved = await page.evaluate(async (name) => (await fetch(`/api/items?q=${encodeURIComponent(name)}`).then(r => r.json())).length, doubleName);
+    assert(saved === 1, `double click created ${saved} items`);
+    console.log('✓ double-clicking save creates one item; Escape answers dialogs');
+
+    // After editing an item, "Add Item" opens a blank form, not the edited item.
+    await page.click('[data-action="edit-item"]');
+    await page.waitForSelector('#item-form');
+    assert(await page.inputValue('#item-id') !== '', 'edit form has no item id');
+    await navTo(page, 'inventory', '#search-input');
+    await page.fill('#search-input', 'zzzz-no-such-gear');
+    await page.waitForSelector('#view-container [data-nav="item-form"]', { timeout: 10000 });
+    await page.click('#view-container [data-nav="item-form"]');
+    await page.waitForSelector('#item-form');
+    assert(await page.inputValue('#item-id') === '', '"Add Item" opened the item edited before');
+    console.log('✓ "Add Item" never reopens the last edited item');
+
+    // Typing in the search box keeps focus and every character across re-renders.
+    await navTo(page, 'inventory', '#search-input');
+    await page.fill('#search-input', '');
+    await page.waitForTimeout(700);
+    await page.focus('#search-input');
+    await page.keyboard.type('Fen', { delay: 40 });
+    await page.waitForTimeout(900);
+    await page.keyboard.type('der', { delay: 40 });
+    await page.waitForTimeout(900);
+    assert(await page.inputValue('#search-input') === 'Fender', `search box lost typing: "${await page.inputValue('#search-input')}"`);
+    assert(await page.evaluate(() => document.activeElement?.id) === 'search-input', 'search box lost focus while typing');
+    console.log('✓ search keeps focus and keystrokes');
+
+    // A slow response for a page the user already left must not replace the current page.
+    await page.route('**/api/items?*', async (route) => {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      await route.continue().catch(() => {});
+    });
+    await page.click('.nav-btn[data-view="labels"]');
+    await page.click('.nav-btn[data-view="dashboard"]');
+    await page.waitForTimeout(2500);
+    assert((await page.textContent('.page-title')).includes('Dashboard'), 'a late response replaced the page the user moved to');
+    await page.unroute('**/api/items?*');
+    console.log('✓ late responses never replace the current page');
+
+    // Help & About shows the server log (the only place Windows users can see errors).
+    await navTo(page, 'about', '#server-log-show');
+    await page.click('#server-log-show');
+    await page.waitForSelector('#server-log-lines:not(.hidden)', { timeout: 10000 });
+    assert(/running at http:\/\/localhost/.test(await page.textContent('#server-log-lines')), 'the server log is not shown');
+    assert(await page.isVisible('#server-log-open'), 'Open Log Folder should be offered on the studio computer');
+    assert(await page.isVisible('#app-stop-server'), 'Stop Studio Inventory should be offered on the studio computer');
+    console.log('✓ Help & About shows the server log');
 
     const stats = await page.evaluate(async () => {
       const r = await fetch('/api/stats');

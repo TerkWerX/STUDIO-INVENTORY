@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install production dependencies
@@ -71,6 +71,13 @@ jobs:
             }
           }
 
+          # Installing over an existing install must keep data\ intact.
+          $marker = Join-Path $target 'data\update-check.txt'
+          Set-Content -LiteralPath $marker -Value 'keep me'
+          Start-Process -FilePath $setup -ArgumentList @('--silent', '--no-start', '--no-shortcuts', '--target', $target) -Wait -NoNewWindow
+          if ((Get-Content -LiteralPath $marker) -ne 'keep me') { throw "Updating over an existing install lost data" }
+          if (Get-ChildItem -LiteralPath (Split-Path -Parent $target) -Filter 'studio-inventory-install-test.*') { throw "Update left staging folders behind" }
+
       - name: Create ZIP
         shell: pwsh
         run: |
@@ -90,7 +97,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install production dependencies
@@ -125,7 +132,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install production dependencies
@@ -173,6 +180,13 @@ jobs:
             throw new Error(`Unexpected appRoot: ${health.appRoot}`);
           }
           NODE
+
+          # Installing over an existing install must keep data/ intact.
+          kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true
+          echo 'keep me' > "$target/data/update-check.txt"
+          "dist/studio-inventory-linux/Install Studio Inventory.sh" --target "$target" --no-start --no-shortcuts
+          test "$(cat "$target/data/update-check.txt")" = 'keep me'
+          test -z "$(ls -d "$target".* 2>/dev/null)"
 
       - name: Create Linux archives
         shell: bash

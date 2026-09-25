@@ -36,11 +36,18 @@ export function renderBrandTile(brand) {
   `;
 }
 
-export function renderBrandsPage(brands) {
+export function renderBrandsPage(brands, { logoLookups = false } = {}) {
   const ownedCount = brands.filter(b => b.item_count > 0).length;
   return `
     <h2 class="page-title">Browse by Brand</h2>
     <p class="page-subtitle">${ownedCount} brands in your studio · ${brands.length} total available</p>
+
+    <label class="toggle-label" style="margin-bottom:1rem">
+      <input type="checkbox" id="brand-logo-lookups" ${logoLookups ? 'checked' : ''}>
+      <span>Look up logos online for new brands
+        <br><span class="text-muted-sm">Sends the brand's website name to unavatar.io, Google and DuckDuckGo. Off keeps everything on this computer; the Fetch buttons still work.</span>
+      </span>
+    </label>
 
     <div class="card">
       <div class="card-header">
@@ -141,7 +148,7 @@ export function renderBrandItems(brand, brandInfo, items) {
                 <p class="item-card-model text-muted-sm">${escapeHtml(item.brand)} ${escapeHtml(item.model)}</p>
                 <div class="item-card-meta">
                   <span class="category-pill">${escapeHtml(item.category)}</span>
-                  <span class="condition-badge condition-${item.condition}">${item.condition}</span>
+                  <span class="condition-badge condition-${escapeHtml(item.condition)}">${escapeHtml(item.condition)}</span>
                 </div>
                 <div class="item-card-footer">
                   <span class="text-muted-sm">${escapeHtml(item.location)}</span>

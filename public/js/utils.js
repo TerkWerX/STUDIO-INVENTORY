@@ -79,10 +79,48 @@ export function renderWarrantyStrip(item) {
     </div>`;
 }
 
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+/**
+ * Escape text for HTML element content AND quoted attribute values.
+ * (Serializing a text node only escapes & < >, which is not enough inside
+ * title="…" or value="…", so quotes are escaped here too.)
+ */
 export function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str ?? '';
-  return div.innerHTML;
+  return String(str ?? '').replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
+}
+
+/** A link target that can only be http(s) or same-site; anything else becomes '#'. */
+export function safeUrl(url) {
+  const text = String(url ?? '').trim();
+  if (!text) return '#';
+  try {
+    const parsed = new URL(text, window.location.origin);
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '#';
+  } catch {
+    return '#';
+  }
+}
+
+// Image fallbacks without inline onerror="…" handlers (blocked by the CSP).
+// Error events do not bubble, so listen in the capture phase.
+if (typeof document !== 'undefined' && !window.__studioImageFallbacks) {
+  window.__studioImageFallbacks = true;
+  document.addEventListener('error', (event) => {
+    const img = event.target;
+    if (!(img instanceof HTMLImageElement)) return;
+    const mode = img.dataset.fallback;
+    if (mode === 'marker') {
+      const span = document.createElement('span');
+      span.className = 'map-marker-fallback';
+      span.textContent = img.dataset.initials || '?';
+      span.title = img.alt || '';
+      img.replaceWith(span);
+    } else if (mode === 'logo') {
+      img.classList.add('hidden');
+      img.nextElementSibling?.classList.remove('hidden');
+    }
+  }, true);
 }
 
 export function debounce(fn, ms = 300) {
@@ -100,6 +138,48 @@ export function showToast(message, type = 'info') {
   el.textContent = message;
   container.appendChild(el);
   setTimeout(() => el.remove(), 4000);
+}
+
+// The open modal's close function, so Escape can cancel it and resolve its promise.
+let activeModalClose = null;
+
+/** Cancel the open confirm/choice modal, if any. Returns true when one was open. */
+export function closeActiveModal() {
+  if (!activeModalClose) return false;
+  activeModalClose();
+  return true;
+}
+
+/**
+ * Wrap an async event handler so it runs once at a time: clicks or submits
+ * while it is still working are ignored, and the button (or the form's submit
+ * buttons) stays disabled until it finishes. Stops double-clicks from saving
+ * the same thing twice.
+ */
+export function singleFlight(handler) {
+  let running = false;
+  return async function guarded(event, ...rest) {
+    if (running) {
+      event?.preventDefault?.();
+      return undefined;
+    }
+    running = true;
+    const target = event?.currentTarget;
+    let controls = [];
+    if (target instanceof HTMLFormElement) {
+      controls = [...target.querySelectorAll('button[type="submit"], button:not([type]), input[type="submit"]')];
+    } else if (target instanceof HTMLButtonElement || target instanceof HTMLInputElement) {
+      controls = [target];
+    }
+    const changed = controls.filter(control => !control.disabled);
+    changed.forEach(control => { control.disabled = true; });
+    try {
+      return await handler.call(this, event, ...rest);
+    } finally {
+      running = false;
+      changed.forEach(control => { control.disabled = false; });
+    }
+  };
 }
 
 function setModalMode(mode = 'confirm') {
@@ -120,6 +200,7 @@ export function showModal({
   promptPlaceholder = 'Enter value',
   promptOptions = []
 }) {
+  closeActiveModal(); // a new question replaces (and cancels) any open one
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
     setModalMode('confirm');
@@ -150,11 +231,14 @@ export function showModal({
     if (prompt) document.getElementById('modal-prompt-input')?.focus();
 
     const close = (result) => {
+      if (activeModalClose === cancel) activeModalClose = null;
       overlay.classList.add('hidden');
       resolve(result);
     };
+    const cancel = () => close(prompt ? null : false);
+    activeModalClose = cancel;
 
-    document.getElementById('modal-cancel').onclick = () => close(prompt ? null : false);
+    document.getElementById('modal-cancel').onclick = cancel;
     document.getElementById('modal-confirm').onclick = () => {
       if (prompt) {
         const v = document.getElementById('modal-prompt-input')?.value;
@@ -167,6 +251,7 @@ export function showModal({
 
 /** Multi-choice modal — returns chosen option id or null. */
 export function showChoiceModal({ title, message, choices = [] }) {
+  closeActiveModal();
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
     setModalMode('choice');
@@ -183,10 +268,13 @@ export function showChoiceModal({ title, message, choices = [] }) {
     `;
     overlay.classList.remove('hidden');
     const close = (result) => {
+      if (activeModalClose === cancel) activeModalClose = null;
       overlay.classList.add('hidden');
       resolve(result);
     };
-    document.getElementById('modal-cancel').onclick = () => close(null);
+    const cancel = () => close(null);
+    activeModalClose = cancel;
+    document.getElementById('modal-cancel').onclick = cancel;
     actions.querySelectorAll('[data-choice]').forEach(btn => {
       btn.onclick = () => close(btn.dataset.choice);
     });
@@ -220,9 +308,8 @@ export function mapMarkerLogoHtml(pin, className = 'map-marker-logo') {
   }
   const src = fileUrl(brand.logo_path);
   const alt = escapeHtml(pin.name || brand.name);
-  return `<img src="${src}" alt="${alt}" class="${className}" loading="lazy"
-    title="${alt}"
-    onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'map-marker-fallback',textContent:'${initials}',title:'${alt}'}))">`;
+  return `<img src="${src}" alt="${alt}" class="${escapeHtml(className)}" loading="lazy"
+    title="${alt}" data-fallback="marker" data-initials="${initials}">`;
 }
 
 /** Brand logo markup with initials fallback when image fails to load. */
@@ -235,8 +322,7 @@ export function brandLogoHtml(brand, className = 'brand-logo', { large = false, 
   const alt = escapeHtml(brand.name || '');
   const fbClass = `brand-logo-fallback${large ? ' lg' : ''} hidden`;
   return `<span class="brand-logo-wrap">
-    <img src="${src}" alt="${alt}" class="${className}" loading="lazy"
-      onerror="this.classList.add('hidden');this.nextElementSibling?.classList.remove('hidden')">
+    <img src="${escapeHtml(src)}" alt="${alt}" class="${escapeHtml(className)}" loading="lazy" data-fallback="logo">
     <span class="${fbClass}">${initials}</span>
   </span>`;
 }

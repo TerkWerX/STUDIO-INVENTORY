@@ -1,14 +1,26 @@
-import { formatCurrency, formatDate } from '../utils.js';
+import { formatCurrency, formatDate, escapeHtml } from '../utils.js';
 import { renderBrandCarousel } from './brands.js';
 import { STUDIO_STATUS_LABELS } from '../lib/completeness-ui.js';
 
-function backupAgeLabel() {
-  const last = localStorage.getItem('lastBackup');
-  if (!last) return { text: 'No backup recorded', warn: true };
-  const days = Math.floor((Date.now() - parseInt(last, 10)) / 86400000);
-  if (days > 30) return { text: `Last backup ${days} days ago`, warn: true };
-  if (days > 7) return { text: `Last backup ${days} days ago`, warn: false };
-  return { text: days === 0 ? 'Backed up today' : `Backed up ${days} day${days !== 1 ? 's' : ''} ago`, warn: false };
+function backupSuccessText(backup) {
+  if (!backup.lastAt) return '';
+  const days = Math.floor((Date.now() - Date.parse(backup.lastAt)) / 86400000);
+  if (!Number.isFinite(days)) return '';
+  if (days > 7) return `Last good copy ${days} days ago`;
+  return days === 0 ? 'Last good copy today' : `Last good copy ${days} day${days !== 1 ? 's' : ''} ago`;
+}
+
+function backupAgeLabel(backup) {
+  if (!backup?.configured) return { text: 'No backup folder set', warn: true };
+  const success = backupSuccessText(backup);
+  if (backup.lastError) {
+    return { text: success ? `Last backup failed. ${success}.` : 'Last backup failed', warn: true };
+  }
+  if (!backup.lastAt) return { text: 'No backup recorded', warn: true };
+  if (!success) return { text: 'No backup recorded', warn: true };
+  const days = Math.floor((Date.now() - Date.parse(backup.lastAt)) / 86400000);
+  if (days > 7) return { text: `Last folder backup ${days} days ago`, warn: true };
+  return { text: days === 0 ? 'Folder backup today' : `Folder backup ${days} day${days !== 1 ? 's' : ''} ago`, warn: false };
 }
 
 export function renderDashboard(stats, brands = []) {
@@ -17,7 +29,7 @@ export function renderDashboard(stats, brands = []) {
     warrantyExpiring, awayItems, activeLoans, overdueLoanCount, activeLoanCount,
     softwareTotals, softwareRenewals, softwareRenewalCount, softwareOverdueCount
   } = stats;
-  const backup = backupAgeLabel();
+  const backup = backupAgeLabel(stats.backup);
   const gaps = completeness?.gaps || {};
 
   return `
@@ -27,7 +39,7 @@ export function renderDashboard(stats, brands = []) {
     <div class="reminder-grid">
       <div class="reminder-card ${backup.warn ? 'reminder-warn' : ''}">
         <div class="reminder-label">Backup</div>
-        <div class="reminder-value">${backup.text}</div>
+        <div class="reminder-value">${escapeHtml(backup.text)}</div>
         <button type="button" class="btn btn-sm btn-secondary" data-nav="backup">Backup Now</button>
       </div>
       <div class="reminder-card ${(completeness?.averageScore || 100) < 80 ? 'reminder-warn' : ''}">
@@ -68,8 +80,8 @@ export function renderDashboard(stats, brands = []) {
           <tbody>
             ${softwareRenewals.slice(0, 8).map(sw => `
               <tr data-action="view-software" data-id="${sw.id}" style="cursor:pointer" class="${sw.overdue ? 'loan-row-overdue' : ''}">
-                <td><strong>${sw.name}</strong></td>
-                <td>${sw.publisher || '—'}</td>
+                <td><strong>${escapeHtml(sw.name)}</strong></td>
+                <td>${escapeHtml(sw.publisher || '—')}</td>
                 <td>${sw.overdue ? '<span class="loan-overdue-badge">Overdue</span> ' : ''}${sw.renewal_date ? formatDate(sw.renewal_date) : '—'}</td>
                 <td class="value-cell">${formatCurrency(sw.replacement_value)}</td>
               </tr>
@@ -92,8 +104,8 @@ export function renderDashboard(stats, brands = []) {
           <tbody>
             ${activeLoans.slice(0, 8).map(loan => `
               <tr data-action="view-item" data-id="${loan.item_id}" class="${loan.overdue ? 'loan-row-overdue' : ''}" style="cursor:pointer">
-                <td><strong>${loan.item_name}</strong></td>
-                <td>${loan.borrower_name}</td>
+                <td><strong>${escapeHtml(loan.item_name)}</strong></td>
+                <td>${escapeHtml(loan.borrower_name)}</td>
                 <td>${loan.overdue ? '<span class="loan-overdue-badge">Overdue</span> ' : ''}${loan.due_date ? formatDate(loan.due_date) : '—'}</td>
               </tr>
             `).join('')}
@@ -113,7 +125,7 @@ export function renderDashboard(stats, brands = []) {
         ${Object.entries(gaps).map(([key, count]) => count > 0 ? `
           <div class="gap-item">
             <span class="gap-count">${count}</span>
-            <span class="gap-label">missing ${completeness.gapLabels?.[key] || key}</span>
+            <span class="gap-label">missing ${escapeHtml(completeness.gapLabels?.[key] || key)}</span>
           </div>
         ` : '').join('') || '<p class="text-muted">All items fully documented.</p>'}
       </div>
@@ -124,9 +136,9 @@ export function renderDashboard(stats, brands = []) {
             <tbody>
               ${completeness.needsAttention.map(row => `
                 <tr data-action="view-item" data-id="${row.id}">
-                  <td><strong>${row.name}</strong><br><span class="text-muted-sm">${row.category}</span></td>
-                  <td><span class="completeness-badge completeness-${row.status}">${row.score}%</span></td>
-                  <td class="text-muted-sm">${row.missing.join(', ')}</td>
+                  <td><strong>${escapeHtml(row.name)}</strong><br><span class="text-muted-sm">${escapeHtml(row.category)}</span></td>
+                  <td><span class="completeness-badge completeness-${escapeHtml(row.status)}">${row.score}%</span></td>
+                  <td class="text-muted-sm">${escapeHtml(row.missing.join(', '))}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -145,9 +157,9 @@ export function renderDashboard(stats, brands = []) {
           <tbody>
             ${warrantyExpiring.map(w => `
               <tr data-action="view-item" data-id="${w.id}">
-                <td>${w.name}</td>
+                <td>${escapeHtml(w.name)}</td>
                 <td>${formatDate(w.warranty_end_date)}</td>
-                <td class="text-muted-sm">${w.warranty_note || '—'}</td>
+                <td class="text-muted-sm">${escapeHtml(w.warranty_note || '—')}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -165,9 +177,9 @@ export function renderDashboard(stats, brands = []) {
           <tbody>
             ${awayItems.map(a => `
               <tr data-action="view-item" data-id="${a.id}">
-                <td>${a.name}</td>
-                <td><span class="studio-status-badge status-${a.studio_status}">${STUDIO_STATUS_LABELS[a.studio_status] || a.studio_status}</span></td>
-                <td class="text-muted-sm">${a.studio_status_note || a.location || '—'}</td>
+                <td>${escapeHtml(a.name)}</td>
+                <td><span class="studio-status-badge status-${escapeHtml(a.studio_status)}">${escapeHtml(STUDIO_STATUS_LABELS[a.studio_status] || a.studio_status)}</span></td>
+                <td class="text-muted-sm">${escapeHtml(a.studio_status_note || a.location || '—')}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -218,7 +230,7 @@ export function renderDashboard(stats, brands = []) {
             <tbody>
               ${byCategory.map(c => `
                 <tr>
-                  <td><span class="category-pill">${c.category || 'Uncategorized'}</span></td>
+                  <td><span class="category-pill">${escapeHtml(c.category || 'Uncategorized')}</span></td>
                   <td>${c.count}</td>
                   <td class="value-cell">${formatCurrency(c.total_value)}</td>
                 </tr>
@@ -236,7 +248,7 @@ export function renderDashboard(stats, brands = []) {
             <tbody>
               ${byLocation.map(l => `
                 <tr>
-                  <td>${l.location || 'Unassigned'}</td>
+                  <td>${escapeHtml(l.location || 'Unassigned')}</td>
                   <td>${l.count}</td>
                   <td class="value-cell">${formatCurrency(l.total_value)}</td>
                 </tr>
@@ -256,8 +268,8 @@ export function renderDashboard(stats, brands = []) {
             <tbody>
               ${recent.map(r => `
                 <tr data-action="view-item" data-id="${r.id}">
-                  <td>${r.name}</td>
-                  <td>${r.category}</td>
+                  <td>${escapeHtml(r.name)}</td>
+                  <td>${escapeHtml(r.category)}</td>
                   <td class="value-cell">${formatCurrency(r.replacement_value)}</td>
                 </tr>
               `).join('') || '<tr><td colspan="3">No items yet</td></tr>'}
@@ -274,8 +286,8 @@ export function renderDashboard(stats, brands = []) {
             <tbody>
               ${highValue.map(h => `
                 <tr data-action="view-item" data-id="${h.id}">
-                  <td>${h.name}</td>
-                  <td>${h.category}</td>
+                  <td>${escapeHtml(h.name)}</td>
+                  <td>${escapeHtml(h.category)}</td>
                   <td class="value-cell">${formatCurrency(h.replacement_value)}</td>
                 </tr>
               `).join('') || '<tr><td colspan="3">No high-value items</td></tr>'}

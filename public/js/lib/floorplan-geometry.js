@@ -174,6 +174,47 @@ export function autoWallLengths(vertices, boundsWidth, boundsDepth) {
   return vertices.map((_, i) => edgeLengthFt(vertices, i, boundsWidth, boundsDepth));
 }
 
+const PIN_LAYER_SELECTOR = '.studio-browse-pin-layer, .map-tablet-pin-layer, .floor-placement-pin-layer, .floorplan-pin-layer';
+
+/** Put percentage pins on the 0–100 room, not on the letterboxed SVG frame. */
+export function fitPinLayer(viewportEl) {
+  if (!viewportEl) return;
+  const svg = viewportEl.querySelector('svg.floorplan-svg') || viewportEl.querySelector('svg');
+  if (!svg) return;
+  const layers = viewportEl.querySelectorAll(PIN_LAYER_SELECTOR);
+  if (!layers.length) return;
+  const preserve = (svg.getAttribute('preserveAspectRatio') || 'none').trim();
+  const stretch = preserve === 'none';
+  const vb = svg.viewBox?.baseVal;
+  const svgRect = svg.getBoundingClientRect();
+  layers.forEach((pinLayer) => {
+    if (stretch || !vb?.width || !vb?.height || svgRect.width < 2 || svgRect.height < 2) {
+      pinLayer.style.left = '0px';
+      pinLayer.style.top = '0px';
+      pinLayer.style.right = '0px';
+      pinLayer.style.bottom = '0px';
+      pinLayer.style.width = '';
+      pinLayer.style.height = '';
+      return;
+    }
+    const scale = Math.min(svgRect.width / vb.width, svgRect.height / vb.height);
+    const contentW = vb.width * scale;
+    const contentH = vb.height * scale;
+    const frameLeft = svgRect.left + (svgRect.width - contentW) / 2;
+    const frameTop = svgRect.top + (svgRect.height - contentH) / 2;
+    const roomLeft = frameLeft + (0 - vb.x) * scale;
+    const roomTop = frameTop + (0 - vb.y) * scale;
+    const parent = pinLayer.offsetParent || pinLayer.parentElement;
+    const parentRect = parent.getBoundingClientRect();
+    pinLayer.style.left = `${roomLeft - parentRect.left}px`;
+    pinLayer.style.top = `${roomTop - parentRect.top}px`;
+    pinLayer.style.width = `${100 * scale}px`;
+    pinLayer.style.height = `${100 * scale}px`;
+    pinLayer.style.right = 'auto';
+    pinLayer.style.bottom = 'auto';
+  });
+}
+
 /** Room proportions in SVG — viewport size stays fixed so zoom/pan can explore it. */
 export function applyRoomDisplay(viewportEl, boundsWidth, boundsDepth) {
   if (!viewportEl) return;
@@ -189,6 +230,12 @@ export function applyRoomDisplay(viewportEl, boundsWidth, boundsDepth) {
     viewportEl.style.removeProperty('--fp-ratio');
     svg?.setAttribute('viewBox', '0 0 100 100');
     svg?.setAttribute('preserveAspectRatio', 'none');
+  }
+  fitPinLayer(viewportEl);
+  if (typeof ResizeObserver !== 'undefined' && !viewportEl.dataset.pinFitBound) {
+    viewportEl.dataset.pinFitBound = '1';
+    const observer = new ResizeObserver(() => fitPinLayer(viewportEl));
+    observer.observe(viewportEl);
   }
 }
 

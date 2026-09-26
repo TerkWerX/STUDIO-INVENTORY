@@ -20,7 +20,7 @@ npm test
 npm start
 ```
 
-Studio Inventory uses Node.js, Express, SQLite, and browser-native JavaScript modules. There is no frontend build step.
+Studio Inventory uses Node.js, Express, SQLite, and browser-native JavaScript modules. There is no frontend build step. **Node.js 22 or newer is required** — `npm test` runs Playwright, and PDF manual indexing needs it.
 
 ## Before opening a pull request
 

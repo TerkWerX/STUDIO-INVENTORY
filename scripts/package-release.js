@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { SAFE_REPLACE_CS } = require('./installer-safe-replace');
 
 const ROOT = path.join(__dirname, '..');
 const platform = (process.argv[2] || '').toLowerCase();
@@ -41,15 +42,18 @@ const COPY = [
   'installers',
 ];
 
+// Skipped inside the app's own folders only. node_modules is copied verbatim:
+// many packages keep their code in dist/ (unpdf, buffer-crc32 used by the
+// backup ZIP code), and dropping it makes the packaged app fail at startup.
 const SKIP_DIR_NAMES = new Set(['.git', '.github', 'dist', 'photos', 'docs']);
 
-function copyRecursive(src, dest) {
+function copyRecursive(src, dest, skip = SKIP_DIR_NAMES) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
     fs.mkdirSync(dest, { recursive: true });
     for (const name of fs.readdirSync(src)) {
-      if (SKIP_DIR_NAMES.has(name)) continue;
-      copyRecursive(path.join(src, name), path.join(dest, name));
+      if (skip.has(name)) continue;
+      copyRecursive(path.join(src, name), path.join(dest, name), skip);
     }
     return;
   }
@@ -85,6 +89,23 @@ function ensureDataDirs() {
     const keep = path.join(dir, '.gitkeep');
     if (!fs.existsSync(keep)) fs.writeFileSync(keep, '');
   }
+}
+
+/** Load every production dependency from the packaged folder, so a release with missing files fails here instead of on users' machines. */
+function checkPackagedDependencies() {
+  const deps = Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).dependencies || {});
+  const script = `for (const name of ${JSON.stringify(deps)}) {
+    try { await import(name); } catch (err) { console.error('  cannot load ' + name + ': ' + err.message); process.exitCode = 1; }
+  }`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: outRoot,
+    stdio: 'inherit'
+  });
+  if (result.status !== 0) {
+    console.error('Packaged dependencies are incomplete; not shipping this build.');
+    process.exit(1);
+  }
+  console.log(`  checked ${deps.length} dependencies load from the package`);
 }
 
 function copyNodeRuntime() {
@@ -136,7 +157,36 @@ class StudioInventoryLauncher {
     Application.EnableVisualStyles();
     string exeName = Path.GetFileNameWithoutExtension(Application.ExecutablePath).ToLowerInvariant();
     string root = AppDomain.CurrentDomain.BaseDirectory;
+    if (HasArg(args, "--stop")) return RunStop(root, HasArg(args, "--silent"));
     return exeName.Contains("install") ? RunInstall(root, args) : RunStart(root);
+  }
+
+  // "Stop Studio Inventory" in the Start menu, and the uninstaller (--silent).
+  // Asks the app to stop itself so it can finish a last backup and close the
+  // catalog cleanly; forces it only if it does not stop in time.
+  static int RunStop(string root, bool silent) {
+    string result;
+    try {
+      // A person stopping the app gets the usual last backup; the uninstaller doesn't wait for one.
+      result = RequestAppStop(root, !silent, silent ? 30 : 180);
+    } catch (Exception ex) {
+      if (!silent) Error(ex.Message);
+      return 2;
+    }
+    if (result == "timeout" || result == "failed") {
+      if (!silent && MessageBox.Show(
+        "Studio Inventory did not stop by itself.\\n\\nForce it to stop? Anything it is saving right now could be lost.",
+        AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) {
+        return 1;
+      }
+      ForceStopProcesses(root);
+    }
+    if (!silent) {
+      MessageBox.Show(result == "not-running" && !AppProcessesRunning(root)
+        ? "Studio Inventory is not running."
+        : "Studio Inventory has stopped.", AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+    return 0;
   }
 
   static int RunStart(string root) {
@@ -189,8 +239,6 @@ class StudioInventoryLauncher {
     string target = !String.IsNullOrWhiteSpace(targetOverride)
       ? Path.GetFullPath(targetOverride)
       : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Studio Inventory");
-    string dataDir = Path.Combine(target, "data");
-    string backupDir = Path.Combine(Path.GetTempPath(), "studio-inventory-data-backup-" + Guid.NewGuid().ToString("N"));
     string source = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     string targetFull = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
@@ -200,7 +248,7 @@ class StudioInventoryLauncher {
       }
 
       if (!silent && MessageBox.Show(
-        "Install Studio Inventory to:\\n\\n" + target + "\\n\\nExisting inventory data in that folder will be preserved.",
+        "Install Studio Inventory to:\\n\\n" + target + "\\n\\nExisting inventory data in that folder will be preserved. If Studio Inventory is running from there, it will be closed first.",
         "Install Studio Inventory",
         MessageBoxButtons.OKCancel,
         MessageBoxIcon.Information) != DialogResult.OK) {
@@ -208,15 +256,8 @@ class StudioInventoryLauncher {
       }
 
       if (!String.Equals(source, targetFull, StringComparison.OrdinalIgnoreCase)) {
-        if (Directory.Exists(dataDir)) CopyDirectory(dataDir, backupDir);
-        if (Directory.Exists(target)) Directory.Delete(target, true);
-        Directory.CreateDirectory(target);
-        CopyDirectory(root, target);
-        if (Directory.Exists(backupDir)) {
-          string restoredData = Path.Combine(target, "data");
-          if (Directory.Exists(restoredData)) Directory.Delete(restoredData, true);
-          CopyDirectory(backupDir, restoredData);
-        }
+        StopInstalledProcesses(targetFull);
+        SafeReplaceInstall(source, targetFull, true, null);
       }
 
       WriteUninstaller(target);
@@ -235,12 +276,10 @@ class StudioInventoryLauncher {
       return 0;
     } catch (Exception ex) {
       return Error("Could not install Studio Inventory.\\n\\nClose Studio Inventory if it is already running, then try again.\\n\\nDetails: " + ex.Message);
-    } finally {
-      try {
-        if (Directory.Exists(backupDir)) Directory.Delete(backupDir, true);
-      } catch {}
     }
   }
+
+${SAFE_REPLACE_CS}
 
   static void CopyDirectory(string sourceDir, string destDir) {
     Directory.CreateDirectory(destDir);
@@ -271,6 +310,7 @@ class StudioInventoryLauncher {
       "echo.\\r\\n" +
       "choice /C YN /M \\\"Remove your inventory data too\\\"\\r\\n" +
       "set \\\"REMOVE_DATA=%ERRORLEVEL%\\\"\\r\\n" +
+      "if exist \\"%APPDIR%\\\\Studio Inventory.exe\\" start \\"\\" /wait \\"%APPDIR%\\\\Studio Inventory.exe\\" --stop --silent\\r\\n" +
       "powershell -NoProfile -ExecutionPolicy Bypass -Command \\\"Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like ($env:APPDIR + '*') } | Stop-Process -Force\\\" >nul 2>nul\\r\\n" +
       "reg delete \\\"HKCU\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\Studio Inventory\\\" /f >nul 2>nul\\r\\n" +
       "del \\\"%DESKTOP%\\\\Studio Inventory.lnk\\\" >nul 2>nul\\r\\n" +
@@ -317,15 +357,21 @@ class StudioInventoryLauncher {
       "Microsoft", "Windows", "Start Menu", "Programs", "Studio Inventory");
     Directory.CreateDirectory(startMenu);
     CreateShortcut(Path.Combine(startMenu, "Studio Inventory.lnk"), exe, target);
+    if (exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) {
+      CreateShortcut(Path.Combine(startMenu, "Stop Studio Inventory.lnk"), exe, target, "--stop");
+    }
     CreateShortcut(Path.Combine(startMenu, "Uninstall Studio Inventory.lnk"), Path.Combine(target, "Uninstall Studio Inventory.cmd"), target);
   }
 
-  static void CreateShortcut(string linkPath, string targetPath, string workingDirectory) {
+  static void CreateShortcut(string linkPath, string targetPath, string workingDirectory, string arguments = "") {
     Type shellType = Type.GetTypeFromProgID("WScript.Shell");
     object shell = Activator.CreateInstance(shellType);
     object shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { linkPath });
     Type shortcutType = shortcut.GetType();
     shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { targetPath });
+    if (!String.IsNullOrEmpty(arguments)) {
+      shortcutType.InvokeMember("Arguments", BindingFlags.SetProperty, null, shortcut, new object[] { arguments });
+    }
     shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { workingDirectory });
     shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "Studio Inventory — local music gear catalog" });
     shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
@@ -418,7 +464,8 @@ for (const item of COPY) {
 }
 
 console.log('  copying node_modules…');
-copyRecursive(path.join(ROOT, 'node_modules'), path.join(outRoot, 'node_modules'));
+copyRecursive(path.join(ROOT, 'node_modules'), path.join(outRoot, 'node_modules'), new Set(['.cache']));
+checkPackagedDependencies();
 
 ensureDataDirs();
 const runtimeNode = copyNodeRuntime();
@@ -435,7 +482,7 @@ if (platform === 'win') {
   );
   writeFile(
     'README-INSTALL.txt',
-    `Studio Inventory — Windows\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Studio Inventory.exe"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall shortcuts (optional):\r\n  Double-click "Install Studio Inventory.exe"\r\n  Creates Start Menu + Desktop shortcuts in %LOCALAPPDATA%\\Studio Inventory\r\n\r\nFallback scripts are included if Windows blocks the launcher:\r\n  Start Studio Inventory.bat\r\n  Install Studio Inventory.bat\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release ZIP\r\n  2. Extract it anywhere temporary\r\n  3. Run "Install Studio Inventory.exe" from the new package\r\n  Your data\\ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks GitHub at startup for updates.\r\n`
+    `Studio Inventory — Windows\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Studio Inventory.exe"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall shortcuts (optional):\r\n  Double-click "Install Studio Inventory.exe"\r\n  Creates Start Menu + Desktop shortcuts in %LOCALAPPDATA%\\Studio Inventory\r\n\r\nFallback scripts are included if Windows blocks the launcher:\r\n  Start Studio Inventory.bat\r\n  Install Studio Inventory.bat\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release ZIP\r\n  2. Extract it anywhere temporary\r\n  3. Run "Install Studio Inventory.exe" from the new package\r\n  Your data\\ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks the TerkWerX website at startup for updates. Use Help & About to check manually and get update instructions.\r\n`
   );
 } else if (platform === 'mac') {
   writeFile(
@@ -451,7 +498,7 @@ if (platform === 'win') {
   fs.chmodSync(path.join(outRoot, 'start-studio-inventory.sh'), 0o755);
   writeFile(
     'README-INSTALL.txt',
-    `Studio Inventory — macOS\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Start Studio Inventory.command"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall to Applications (optional):\r\n  Double-click "Install Studio Inventory.command"\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release DMG or ZIP\r\n  2. Run "Install Studio Inventory.command" from the new package\r\n  Your data/ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks GitHub at startup for updates.\r\n\r\nFirst time: if macOS blocks the script, right-click → Open.\r\nFull guide: MAC.md or https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/MAC.md\r\n`
+    `Studio Inventory — macOS\r\n\r\nPortable (no install):\r\n  1. Extract this ZIP anywhere\r\n  2. Double-click "Start Studio Inventory.command"\r\n  3. Your browser opens at http://localhost:3847\r\n\r\nInstall to Applications (optional):\r\n  Double-click "Install Studio Inventory.command"\r\n\r\nUpdating (keeps your gear, photos, manuals, wall photos, and receipts):\r\n  1. Download the newer release DMG or ZIP\r\n  2. Run "Install Studio Inventory.command" from the new package\r\n  Your data/ folder is backed up and restored automatically.\r\n\r\nThe app includes its own Node runtime and checks the TerkWerX website at startup for updates. Use Help & About to check manually and get update instructions.\r\n\r\nFirst time: if macOS blocks the script, click Done, then open System Settings > Privacy & Security\r\nand click Open Anyway (macOS 15 and later). On macOS 14 and earlier, Control-click the file and choose Open.\r\nFull guide: MAC.md or https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/MAC.md\r\n`
   );
 } else {
   writeFile(
@@ -495,7 +542,7 @@ Updating preserves your gear, photos, manuals, wall photos, and receipts:
   1. Download and extract the newer release
   2. Run ./Install\\ Studio\\ Inventory.sh from the new package
 
-The app includes its own Node runtime and checks GitHub at startup for updates.
+The app includes its own Node runtime and checks the TerkWerX website at startup for updates. Use Help & About to check manually and get update instructions.
 Full guide: LINUX.md or https://github.com/TerkWerX/STUDIO-INVENTORY/blob/main/LINUX.md
 `
   );

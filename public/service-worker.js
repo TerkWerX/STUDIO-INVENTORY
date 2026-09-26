@@ -1,4 +1,4 @@
-const CACHE = 'studio-inventory-v270';
+const CACHE = 'studio-inventory-v291-r3';
 const ASSETS = [
   '/',
   '/index.html',
@@ -46,6 +46,9 @@ const ASSETS = [
   '/js/photo-upload.js',
   '/js/lib/label-settings.js',
   '/js/lib/dymo-labels.js',
+  '/js/lib/insurance-rows.mjs',
+  '/vendor/jspdf/jspdf.umd.min.js',
+  '/vendor/jspdf/jspdf.plugin.autotable.min.js',
   '/manifest.json',
   '/icons/icon.svg'
 ];
@@ -80,22 +83,37 @@ self.addEventListener('fetch', (e) => {
     );
     return;
   }
-  const isAppAsset = e.request.url.includes('/js/') || e.request.url.includes('/css/');
+  const url = new URL(e.request.url);
+  // Pages: always ask the server first, so an update never runs new scripts
+  // against an old page. Offline, fall back to the cached page (query strings,
+  // which can hold share tokens, are ignored and never stored).
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request).catch(async () => {
+        const cached = await caches.match(url.pathname, { ignoreSearch: true })
+          || await caches.match('/index.html');
+        return cached || offlinePage();
+      })
+    );
+    return;
+  }
+  const isAppAsset = url.pathname.startsWith('/js/') || url.pathname.startsWith('/css/')
+    || url.pathname.startsWith('/vendor/');
   if (isAppAsset) {
     e.respondWith(
       fetch(e.request).then(res => {
-        if (res.ok && e.request.method === 'GET') {
+        if (res.ok && e.request.method === 'GET' && !url.search) {
           const clone = res.clone();
           caches.open(CACHE).then(c => c.put(e.request, clone));
         }
         return res;
-      }).catch(() => caches.match(e.request))
+      }).catch(async () => (await caches.match(e.request, { ignoreSearch: true })) || Response.error())
     );
     return;
   }
   e.respondWith(
     caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
-      if (res.ok && e.request.method === 'GET') {
+      if (res.ok && e.request.method === 'GET' && !url.search) {
         const clone = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, clone));
       }
@@ -103,3 +121,12 @@ self.addEventListener('fetch', (e) => {
     }))
   );
 });
+
+function offlinePage() {
+  return new Response(
+    '<!doctype html><meta charset="utf-8"><title>Studio Inventory</title>'
+    + '<p style="font-family:system-ui;padding:2rem">Studio Inventory is not reachable. '
+    + 'Check that the studio computer is on and the app is running, then reload.</p>',
+    { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+  );
+}

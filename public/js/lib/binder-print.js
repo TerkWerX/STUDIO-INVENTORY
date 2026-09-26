@@ -332,12 +332,25 @@ export function buildBinderDocument({
 <style>${printStyles()}</style>
 </head><body>
 <div class="print-toolbar">
-  <button type="button" onclick="window.print()">Print</button>
-  <button type="button" onclick="window.close()">Close</button>
+  <button type="button" data-print-window="print">Print</button>
+  <button type="button" data-print-window="close">Close</button>
   <span>Formatted for US Letter · left margin for 3-hole punch · ${includeItemPages ? `${sorted.length} gear page${sorted.length !== 1 ? 's' : ''}` : 'index / cover'}</span>
 </div>
 ${parts.join('\n')}
 </body></html>`;
+}
+
+/**
+ * Pop-up print windows inherit this page's Content-Security-Policy, which
+ * blocks inline onclick="…" handlers, so wire the toolbar buttons from here.
+ */
+function bindPrintWindowButtons(win) {
+  win.document.querySelectorAll('[data-print-window]').forEach(button => {
+    button.addEventListener('click', () => {
+      if (button.dataset.printWindow === 'print') win.print();
+      else win.close();
+    });
+  });
 }
 
 export function openBinderPrint(html, { autoPrint = true, title = 'Binder Print' } = {}) {
@@ -347,6 +360,7 @@ export function openBinderPrint(html, { autoPrint = true, title = 'Binder Print'
   win.document.write(html);
   win.document.close();
   win.document.title = title;
+  bindPrintWindowButtons(win);
   if (autoPrint) {
     win.onload = () => {
       setTimeout(() => win.print(), 400);
@@ -414,13 +428,14 @@ export function openManualForPrint(relativePath, documentName) {
   }
 </style></head><body>
 <div class="toolbar">
-  <button type="button" onclick="window.print()">Print Manual</button>
-  <button type="button" onclick="window.close()">Close</button>
+  <button type="button" data-print-window="print">Print Manual</button>
+  <button type="button" data-print-window="close">Close</button>
   <span>${escapeHtml(documentName)} — use Print when ready (not printed automatically)</span>
 </div>
-<embed src="${url}" type="application/pdf">
+<embed src="${escapeHtml(url)}" type="application/pdf">
 </body></html>`);
   win.document.close();
+  bindPrintWindowButtons(win);
 }
 
 export function isPdfManual(attachment) {

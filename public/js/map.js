@@ -27,33 +27,9 @@ function showToast(msg) {
   }, 2500);
 }
 
-function buildPinPayload(fp) {
-  return (fp?.items || []).map(p => ({
-    item_id: p.id,
-    x_pct: p.x_pct,
-    y_pct: p.y_pct,
-    placement: p.placement || 'floor',
-    wall_edge: p.wall_edge,
-    wall_t: p.wall_t,
-    height_ft: p.height_ft,
-    icon_mode: p.icon_mode,
-    wall_photo_path: p.wall_photo_path,
-    photo_width_ft: p.photo_width_ft,
-    photo_height_ft: p.photo_height_ft,
-    rotation_deg: p.rotation_deg || 0,
-    wall_display: p.wall_display !== false
-  }));
-}
-
+/** Save only the pins that changed; pins placed meanwhile on other devices are kept. */
 async function mergePinUpdates(fpId, updates) {
-  const fp = floorplans.find(f => f.id === fpId) || activeFp;
-  const pins = buildPinPayload(fp);
-  for (const u of updates) {
-    const row = pins.find(p => p.item_id === u.item_id);
-    if (row) Object.assign(row, u);
-    else pins.push({ item_id: u.item_id, x_pct: 50, y_pct: 50, ...u });
-  }
-  const updated = await api.setFloorplanItems(fpId, pins);
+  const updated = await api.updateFloorplanItems(fpId, { upsert: updates });
   const idx = floorplans.findIndex(f => f.id === fpId);
   if (idx >= 0) floorplans[idx] = updated;
   activeFp = updated;
@@ -67,15 +43,8 @@ async function openPhotoHangForPin(fp, pin) {
     pin,
     unit: fp.unit || 'ft',
     onSave: async (patch) => {
-      const pins = buildPinPayload(fp);
-      const row = pins.find(p => p.item_id === pin.id);
-      if (row) Object.assign(row, { placement: 'wall', wall_display: true, ...patch });
-      else pins.push({ item_id: pin.id, placement: 'wall', wall_display: true, ...patch });
-      const updated = await api.setFloorplanItems(fp.id, pins);
+      await mergePinUpdates(fp.id, [{ item_id: pin.id, placement: 'wall', wall_display: true, ...patch }]);
       await api.saveWallCutout(pin.id, patch).catch(() => {});
-      const idx = floorplans.findIndex(f => f.id === fp.id);
-      if (idx >= 0) floorplans[idx] = updated;
-      activeFp = updated;
       renderFloorplan(activeFp.id);
       showToast('Wall photo hang updated');
     },
@@ -104,10 +73,15 @@ function openWallForPlacement(edge) {
       renderFloorplan(activeFp.id);
       showToast('Item placed on wall');
     },
-    onPhotoEdit: (pin) => openPhotoHangForPin(activeFp, pin),
+    onPhotoEdit: (pin) => openPhotoHangForPin(activeFp, pin).catch(err => showToast(err.message || 'Could not open the wall photo editor', 'error')),
     onToast: showToast
   });
 }
+
+// Anything that fails without its own handler still tells the user.
+window.addEventListener('unhandledrejection', (event) => {
+  showToast(event.reason?.message || 'Something went wrong', 'error');
+});
 
 async function init() {
   try {

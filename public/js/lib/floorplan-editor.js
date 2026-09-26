@@ -189,13 +189,19 @@ export function initFloorplanEditor(root, {
     fp.floor_image_x = floorView.focusX;
     fp.floor_image_y = floorView.focusY;
     fp.floor_image_fit = floorView.fit;
-    await onSaveFloorView?.({
-      floor_image_scale: floorView.scale,
-      floor_image_x: floorView.focusX,
-      floor_image_y: floorView.focusY,
-      floor_image_fit: floorView.fit
-    });
-    setStatus('Floor framing saved');
+    try {
+      await onSaveFloorView?.({
+        floor_image_scale: floorView.scale,
+        floor_image_x: floorView.focusX,
+        floor_image_y: floorView.focusY,
+        floor_image_fit: floorView.fit
+      });
+      setStatus('Floor framing saved');
+    } catch (err) {
+      // Runs from a timer, so nobody else would see this failure.
+      setStatus(`Floor framing not saved: ${err.message}`);
+      onToast?.(`Floor framing not saved: ${err.message}`, 'error');
+    }
   }, 420);
 
   function renderPolygon() {

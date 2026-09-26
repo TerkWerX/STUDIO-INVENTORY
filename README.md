@@ -28,7 +28,7 @@
 
 Gear collections grow one cable, bracket, instrument, and impulse purchase at a time. Studio Inventory gives musicians, engineers, rehearsal spaces, schools, collectors, and small studios one place to track the equipment itself—and the details that make it useful later.
 
-- **No subscription or cloud account.** The database, photos, receipts, and manuals stay on the host computer.
+- **No subscription or cloud account.** The database, photos, receipts, and manuals stay on the host computer. See [Privacy and defaults](#privacy-and-defaults) for the short list of things that can reach the internet.
 - **Ready for real equipment chains.** Nest a drum pad under its mount, the adapter under that, and the paid thumb screws under the adapter.
 - **Useful away from the desk.** Add photos and scan labels from Android Chrome/Edge or iPhone/iPad Safari on the same trusted network.
 - **Built for proof of ownership.** Track serials, values, receipts, condition, warranties, manuals, and insurance notes.
@@ -67,6 +67,19 @@ Electronic drum kit
 
 Every record can keep its own price, receipt, photos, specifications, and compatibility result. Parent records show the complete assembly value.
 
+## What's new in 2.9.1
+
+A security and reliability release; nothing about how you catalog gear changed.
+
+- **Updates can no longer lose your catalog.** Installers move `data/` into the new version with a single rename and put the previous version back if any step fails.
+- **A proper way to stop the app** on every platform: **Help & About → Stop Studio Inventory**, or **Stop Studio Inventory** in the Windows Start menu. Installers ask the app to stop instead of ending it abruptly, so the catalog closes cleanly.
+- **A server log** at `data/logs/studio-inventory.log`, viewable in **Help & About → Server Log**. On Windows, where the app runs without a window, this is the only place error details appear.
+- **Backups stream to disk**, so large photo and manual collections no longer have to fit in memory.
+- **Stricter defaults**: look-alike host names are refused, reverse-proxy requests always need the owner PIN, guest links hide prices and notes, and downloads refuse addresses on your own network.
+- **Node.js 22 or newer** is required when running from source. Release downloads include the right runtime.
+
+Full details, including behavior changes to read before updating: **[2.9.1 release notes](docs/RELEASE-v2.9.1.md)**.
+
 ## Install
 
 Pre-built releases include the runtime and production dependencies—no separate Node.js installation is required.
@@ -74,13 +87,15 @@ Pre-built releases include the runtime and production dependencies—no separate
 | Platform | Recommended download | Start here |
 |---|---|---|
 | **Windows** | `Windows-Setup.exe` | Run setup, then launch **Studio Inventory** |
-| **macOS** | `.dmg` | Open the image and run the installer; Control-click → **Open** if Gatekeeper warns |
+| **macOS** | `.dmg` | Open the image and run the installer; if macOS blocks it, see [allowing it once](MAC.md#if-macos-blocks-it-the-first-time) |
 | **Linux x64** | `.tar.gz` | Extract and run `Install Studio Inventory.sh` |
 | **Portable use** | Platform ZIP | Extract and use the included launcher |
 
 **[Download the latest release →](https://github.com/TerkWerX/STUDIO-INVENTORY/releases/latest)**
 
 Existing inventory lives in the local `data/` folder and is preserved by release installers. Create a **Full Backup ZIP** before any upgrade.
+
+To stop the app, use **Help & About → Stop Studio Inventory** (or **Stop Studio Inventory** in the Windows Start menu). Closing the browser tab leaves the server running.
 
 Platform guides: **[macOS](MAC.md)** · **[Linux](LINUX.md)** · **[Wiki installation guide](https://github.com/TerkWerX/STUDIO-INVENTORY/wiki/Installation)**
 
@@ -94,7 +109,7 @@ Platform guides: **[macOS](MAC.md)** · **[Linux](LINUX.md)** · **[Wiki install
 Android Chrome/Edge and iPhone/iPad Safari support inventory editing and photo capture. Live barcode video requires HTTPS; the regular LAN address provides **Take a Label Photo** and signed QR links instead.
 
 > [!IMPORTANT]
-> Do not forward port `3847` to the internet. Normal LAN HTTP traffic is not encrypted. Use trusted WPA2/WPA3 Wi-Fi, HTTPS, or a VPN.
+> Do not forward port `3847` to the internet. Normal LAN HTTP traffic is not encrypted. Use trusted WPA2/WPA3 Wi-Fi, HTTPS, or a VPN. Behind an HTTPS proxy with its own host name, add that name to `STUDIO_ALLOWED_HOSTS` (see [SECURITY.md](SECURITY.md)).
 
 ## Your data stays understandable
 
@@ -104,12 +119,30 @@ Android Chrome/Edge and iPhone/iPad Safari support inventory editing and photo c
 | `data/uploads/` | Photos, receipts, manuals, logos, software, and studio images |
 | `data/manual-inbox/` | Files waiting to be attached to an item |
 | `data/backups/` | Suggested destination for backup exports |
+| `data/logs/` | Server log (`studio-inventory.log`). Share links and PINs are masked. |
 
 The app supports Full Backup ZIP, JSON, SQL, CSV, and PDF exports. Full Backup ZIP is the complete recovery format because it includes managed files as well as the database.
 
+> [!IMPORTANT]
+> If you turn on catalog encryption, the key is deliberately **not** stored in `data/`. It lives in the operating system's credential store — Windows DPAPI (`%APPDATA%\Studio Inventory`), the macOS Keychain, or libsecret on Linux — and belongs to your user account on that computer. Copying `data/` to another machine is not enough to open an encrypted catalog there: keep the recovery key the app shows you, or restore from a Full Backup ZIP.
+
+## Privacy and defaults
+
+Studio Inventory keeps your catalog on your own computer. A few features can reach the internet, and the ones that send anything are off until you turn them on.
+
+| Feature | Default | What leaves the computer |
+|---|---|---|
+| Version check | **On** | An HTTPS request for `terkwerx.com/downloads/studio-inventory/latest.json` at startup, cached for six hours. It asks for a file; it uploads nothing about you or your gear. Set `STUDIO_SKIP_UPDATE_CHECK=1` to switch it off. |
+| Brand logo lookups | **Off** | When enabled in **Brands**, the brand's website name goes to unavatar.io, Google and DuckDuckGo. The manual **Fetch logo** buttons work either way. |
+| DYMO label printing | **Off** | When enabled in **Owner Labels**, the page loads DYMO's Connect framework from DYMO's own host. Left off, every script comes from this computer, and **Print Selected (Browser)** still prints the same labels. |
+| Manual and installer downloads | On request | Only the address you paste. Addresses on your own computer or local network are refused unless you set `STUDIO_ALLOW_PRIVATE_DOWNLOADS=1`. |
+| Guest links and QR labels | Off until created | Nothing is uploaded. Guest links are read-only and hide prices, receipts, notes and borrower details; a QR label opens only its own item. |
+
+Nothing is sent to the project maintainers, and there is no analytics or crash reporting.
+
 ## Run from source
 
-Requires [Node.js](https://nodejs.org/) 18 or newer.
+Requires [Node.js](https://nodejs.org/) 22 or newer.
 
 ```bash
 git clone https://github.com/TerkWerX/STUDIO-INVENTORY.git
@@ -128,7 +161,7 @@ npm run test:browser  # Playwright UI tests
 
 ### Technology
 
-Node.js · Express · SQLite (`better-sqlite3`) · vanilla JavaScript modules · Playwright · local filesystem storage
+Node.js · Express · SQLite (`better-sqlite3-multiple-ciphers`, so the catalog can be encrypted at rest) · vanilla JavaScript modules · Playwright · local filesystem storage
 
 There is no frontend build step. The server exposes the API and serves the responsive web app directly.
 

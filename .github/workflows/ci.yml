@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Run it by hand on any branch from the Actions tab.
+  workflow_dispatch:
 
 jobs:
   smoke-test:
@@ -14,7 +16,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install dependencies
@@ -25,3 +27,91 @@ jobs:
 
       - name: Run full test suite
         run: npm test
+
+      - name: Check the Linux package loads its dependencies
+        run: node scripts/package-release.js linux "$RUNNER_TEMP/package-check"
+
+  # Most studios run Windows, where file locking, paths and the catalog key
+  # storage behave differently, so the whole suite runs there too, and the real
+  # Windows installer is exercised: install, add gear, update over the running
+  # app, and check the gear is still there.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Build the Windows package and setup
+        run: |
+          npm ci --omit=dev
+          node scripts/package-release.js win dist/studio-inventory-win
+          node scripts/build-windows-setup.js dist/studio-inventory-win dist/Studio-Inventory-Setup.exe
+
+      - name: Install, add gear, update over the running app, stop it, check the gear survived
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:RUNNER_TEMP 'studio-inventory-update-test'
+          $setup = 'dist/Studio-Inventory-Setup.exe'
+          $node = Join-Path $target '.runtime\node.exe'
+          $log = Join-Path $target 'data\logs\studio-inventory.log'
+          # The installed app's own port, so setup and the launcher find it the way they do for users.
+          $base = 'http://127.0.0.1:3847'
+          $env:PORT = '3847'
+          $env:STUDIO_SKIP_UPDATE_CHECK = '1'
+          $env:STUDIO_SKIP_AUTO_BACKUP = '1'
+
+          function Start-App {
+            $proc = Start-Process -FilePath $node -ArgumentList 'server.js' -WorkingDirectory $target -WindowStyle Hidden -PassThru
+            for ($i = 0; $i -lt 60; $i++) {
+              try { if ((Invoke-RestMethod -Uri "$base/api/health" -TimeoutSec 2).ok) { return $proc } } catch { Start-Sleep -Milliseconds 500 }
+            }
+            throw 'The installed app did not start'
+          }
+          function Install-App {
+            $p = Start-Process -FilePath $setup -ArgumentList @('--silent', '--no-start', '--no-shortcuts', '--target', $target) -Wait -NoNewWindow -PassThru
+            if ($p.ExitCode -ne 0) { throw "Setup failed with exit code $($p.ExitCode)" }
+          }
+
+          Install-App
+          $app = Start-App
+          Invoke-RestMethod -Method Post -Uri "$base/api/items" -ContentType 'application/json' -Body '{"name":"Update check mic","serial_number":"UPD-1"}' | Out-Null
+
+          # Update while the app is still running: setup must ask it to stop (so the
+          # catalog is closed cleanly), then update and keep data\.
+          Install-App
+          if (!$app.HasExited) { throw 'Setup did not stop the running app before updating' }
+          if (!(Select-String -LiteralPath $log -Pattern 'Stop requested' -Quiet)) { throw 'Setup forced the app to stop instead of asking it to' }
+
+          $app = Start-App
+          try {
+            $found = Invoke-RestMethod -Uri "$base/api/items?q=UPD-1"
+            if (@($found).Count -ne 1) { throw 'The gear added before the update is gone' }
+            if (!(Test-Path (Join-Path $target 'data\logs\studio-inventory.log'))) { throw 'No server log file on Windows' }
+            # Not -Filter: Windows wildcards let 'name.*' match 'name' itself (the install).
+            $left = @(Get-ChildItem -LiteralPath (Split-Path -Parent $target) | Where-Object { $_.Name -like 'studio-inventory-update-test.*' })
+            if ($left) { throw "The update left folders behind: $($left.Name -join ', ')" }
+
+            # "Stop Studio Inventory" (the launcher with --stop) closes the app cleanly.
+            $before = @(Select-String -LiteralPath $log -Pattern 'is stopping').Count
+            $stop = Start-Process -FilePath (Join-Path $target 'Studio Inventory.exe') -ArgumentList @('--stop', '--silent') -Wait -PassThru
+            if ($stop.ExitCode -ne 0) { throw "The launcher's stop failed with exit code $($stop.ExitCode)" }
+            if (!$app.WaitForExit(10000)) { throw 'The launcher did not stop the app' }
+            if (@(Select-String -LiteralPath $log -Pattern 'is stopping').Count -le $before) { throw 'The app was not stopped cleanly' }
+            if (Test-Path (Join-Path $target 'data\inventory.db-wal')) { throw 'The catalog was not closed cleanly' }
+          } finally {
+            if (!$app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }

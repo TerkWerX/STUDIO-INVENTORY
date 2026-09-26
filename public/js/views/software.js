@@ -46,7 +46,7 @@ function screenshotBlock(sw, { large = false } = {}) {
   return `
     <div class="sw-shot-placeholder${large ? ' sw-shot-lg' : ''}" aria-hidden="true">
       <span class="sw-shot-icon">&#127925;</span>
-      <span class="sw-shot-hint">${large ? 'No screenshot yet' : sw.publisher || sw.category}</span>
+      <span class="sw-shot-hint">${escapeHtml(large ? 'No screenshot yet' : sw.publisher || sw.category)}</span>
     </div>
   `;
 }
@@ -273,13 +273,13 @@ export function renderSoftwareForm(sw, meta) {
         <div class="form-group">
           <label for="sw-license-type">License type</label>
           <select id="sw-license-type">
-            ${licenseTypes.map(t => `<option value="${t}" ${data.license_type === t ? 'selected' : ''}>${escapeHtml(LICENSE_LABELS[t] || t)}</option>`).join('')}
+            ${licenseTypes.map(t => `<option value="${escapeHtml(t)}" ${data.license_type === t ? 'selected' : ''}>${escapeHtml(LICENSE_LABELS[t] || t)}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
           <label for="sw-activation">Activation</label>
           <select id="sw-activation">
-            ${activationMethods.map(m => `<option value="${m}" ${data.activation_method === m ? 'selected' : ''}>${escapeHtml(ACTIVATION_LABELS[m] || m)}</option>`).join('')}
+            ${activationMethods.map(m => `<option value="${escapeHtml(m)}" ${data.activation_method === m ? 'selected' : ''}>${escapeHtml(ACTIVATION_LABELS[m] || m)}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">

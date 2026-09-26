@@ -41,11 +41,28 @@ No Terminal or Node.js required.
 2. Download **`Studio-Inventory-v…-macOS.dmg`** (or the `.zip`)
 3. Open the DMG or extract the ZIP
 4. Double-click **`Start Studio Inventory.command`**
-5. If macOS warns about an unidentified developer, **right-click → Open** once
+5. If macOS says it can't verify the developer, allow it once (see below)
 
 **Optional:** run **`Install Studio Inventory.command`** to copy the app to `~/Applications/Studio Inventory` and add a Desktop shortcut.
 
 Your browser opens at **http://localhost:3847** automatically.
+
+### If macOS blocks it the first time
+
+Studio Inventory isn't signed with an Apple Developer ID yet, so macOS asks you to confirm it once.
+
+**macOS Sequoia (15) and later:**
+
+1. Double-click the `.command` file, then click **Done** on the warning (not *Move to Trash*)
+2. Open **System Settings → Privacy & Security**
+3. Scroll to **Security**; next to the message about *Studio Inventory*, click **Open Anyway**
+4. Enter your Mac password, then double-click the file again and choose **Open**
+
+The **Open Anyway** button only appears for about an hour after the blocked attempt. If it's gone, double-click the file again.
+
+**macOS Sonoma (14) and earlier:** Control-click (or right-click) the file, choose **Open**, then click **Open** in the dialog.
+
+Running **`Install Studio Inventory.command`** after you've allowed it means the installed copy won't ask again.
 
 ### Updating (your gear stays put)
 
@@ -53,7 +70,9 @@ When the app shows an **update available** banner, or you see a new release on G
 
 1. Download the latest **macOS .dmg** or `.zip`
 2. Run **`Install Studio Inventory.command`** from the new package
-3. Your existing `data/` folder (inventory, photos, manuals, receipts, wall photos, software, and Manual Inbox) is **preserved automatically**
+3. Your existing `data/` folder (inventory, photos, manuals, receipts, wall photos, software, and Manual Inbox) is **preserved automatically**. The installer never copies or deletes it: it's moved into the new version, and if anything goes wrong part way the previous version is put back as it was.
+
+Close Studio Inventory (its Terminal window) before updating. Making a **Full Backup ZIP** first is still a good habit.
 
 You do not need to re-enter your gear.
 
@@ -74,7 +93,7 @@ Use this path if you want the latest `main` branch or plan to contribute.
 node --version
 ```
 
-You should see `v18.x.x` or higher.
+You should see `v22.x.x` or higher. Studio Inventory needs Node.js 22 or newer.
 
 ### Step 2 — Get Studio Inventory
 
@@ -120,7 +139,7 @@ You should see something like:
 Studio Inventory running at http://localhost:3847
 ```
 
-Leave this Terminal window **open** while you use the app. Press **Ctrl+C** in Terminal to stop the server.
+Leave this Terminal window **open** while you use the app. To stop it, use **Help & About → Stop Studio Inventory** in the app, which closes the catalog cleanly, or press **Ctrl+C** in Terminal.
 
 ### Step 5 — Open the app
 
@@ -148,7 +167,7 @@ chmod +x start-studio-inventory.sh   # only needed once
 | Task | How |
 |------|-----|
 | **Start** | Open Terminal → `cd` to project folder → `npm start` |
-| **Stop** | Press **Ctrl+C** in the Terminal window running the server |
+| **Stop** | **Help & About → Stop Studio Inventory** in the app (closes the catalog cleanly), or **Ctrl+C** in the Terminal window running the server |
 | **Fullscreen** | **Control+Command+F** in Safari, or browser fullscreen |
 | **New item** | **⌘N** |
 | **Search inventory** | **⌘F** (on Inventory page) |

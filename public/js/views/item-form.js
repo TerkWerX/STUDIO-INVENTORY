@@ -18,7 +18,7 @@ export function renderItemForm(item, meta) {
     requires_power: false, power_adapter_voltage: '', power_adapter_current: '',
     power_adapter_polarity: '', power_adapter_notes: '',
     update_checks_enabled: true, warranty_end_date: '', warranty_note: '',
-    studio_status: 'in_studio', studio_status_note: '', tags: []
+    studio_status: 'in_studio', studio_status_note: '', disposition_date: '', tags: []
   };
   const data = { ...defaults, ...(item || {}) };
   data.instrument_specs = item?.instrument_specs || item?.specs || {};
@@ -123,16 +123,24 @@ export function renderItemForm(item, meta) {
             <option value="in_repair" ${data.studio_status === 'in_repair' ? 'selected' : ''}>In repair</option>
             <option value="storage" ${data.studio_status === 'storage' ? 'selected' : ''}>In storage</option>
             <option value="away" ${data.studio_status === 'away' ? 'selected' : ''}>Away (gig, other room, etc.)</option>
+            <option value="sold" ${data.studio_status === 'sold' ? 'selected' : ''}>Sold</option>
+            <option value="stolen" ${data.studio_status === 'stolen' ? 'selected' : ''}>Stolen</option>
+            <option value="destroyed" ${data.studio_status === 'destroyed' ? 'selected' : ''}>Destroyed</option>
+            <option value="given_away" ${data.studio_status === 'given_away' ? 'selected' : ''}>Given away</option>
           </select>
+        </div>
+        <div class="form-group form-mode-full-only">
+          <label for="disposition_date">Left the collection</label>
+          <input type="date" id="disposition_date" value="${escapeHtml(data.disposition_date || '')}">
         </div>
         <div class="form-group full-width form-mode-full-only">
           <label for="studio_status_note">Status Note</label>
-          <input type="text" id="studio_status_note" value="${escapeHtml(data.studio_status_note || '')}" placeholder="e.g. At Mike's studio until Friday, UPS to Sweetwater repair">
+          <input type="text" id="studio_status_note" value="${escapeHtml(data.studio_status_note || '')}" placeholder="Required if sold, stolen, destroyed, or given away">
         </div>
         <div class="form-group">
           <label for="condition">Condition</label>
           <select id="condition">
-            ${meta.conditions.map(c => `<option value="${c}" ${data.condition === c ? 'selected' : ''}>${c}</option>`).join('')}
+            ${meta.conditions.map(c => `<option value="${escapeHtml(c)}" ${data.condition === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
@@ -197,11 +205,6 @@ export function renderItemForm(item, meta) {
             <input type="number" id="replacement_value" min="0" step="0.01" value="${data.replacement_value || 0}" style="flex:1">
             <button type="button" class="btn btn-accent btn-sm" id="form-auto-estimate" style="min-height:var(--touch-min)">Auto-Estimate</button>
           </div>
-        </div>
-        <div class="form-group form-mode-full-only">
-          <label for="depreciated_value">Depreciated Value ($)</label>
-          <input type="number" id="depreciated_value" min="0" step="0.01" value="${data.depreciated_value || 0}">
-          <p class="text-muted-sm" style="margin-top:0.35rem">Tax or insurance depreciation — separate from replacement cost.</p>
         </div>
         <div class="form-group full-width form-mode-full-only">
           <label for="replacement_value_note">Replacement Value Note</label>
@@ -281,6 +284,7 @@ export function collectFormData() {
     location: document.getElementById('location').value,
     studio_status: document.getElementById('studio_status').value,
     studio_status_note: document.getElementById('studio_status_note').value,
+    disposition_date: document.getElementById('disposition_date')?.value || '',
     condition: document.getElementById('condition').value,
     quantity: document.getElementById('quantity').value,
     purchase_date: document.getElementById('purchase_date').value,
@@ -290,7 +294,6 @@ export function collectFormData() {
     parent_item_id: document.getElementById('parent_item_id').value || null,
     replacement_value: document.getElementById('replacement_value').value,
     replacement_value_note: document.getElementById('replacement_value_note').value,
-    depreciated_value: document.getElementById('depreciated_value').value,
     on_insurance_policy: document.getElementById('on_insurance_policy').checked,
     insurance_policy_note: document.getElementById('insurance_policy_note').value,
     condition_notes: document.getElementById('condition_notes').value,

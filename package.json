@@ -1,6 +1,6 @@
 {
   "name": "studio-inventory",
-  "version": "2.7.0",
+  "version": "2.9.1",
   "description": "Local-first inventory and studio planning for musical instruments, audio equipment, documents, accessories, and software",
   "main": "server.js",
   "author": "TerkWerX",
@@ -19,7 +19,9 @@
     "sync-brands": "node scripts/populate-logos.js",
     "fetch-logos": "node scripts/fetch-logos.js",
     "fetch-logos:force": "node scripts/fetch-logos.js --force",
-    "test": "node scripts/smoke-test.js && node scripts/api-smoke-test.js && node scripts/security-smoke-test.js && node scripts/browser-smoke-test.js",
+    "test": "node --test scripts/update-smoke-test.js scripts/backup-csv-test.js scripts/hardening-test.js scripts/installer-test.js scripts/log-file-test.js && node scripts/smoke-test.js && node scripts/api-smoke-test.js && node scripts/security-smoke-test.js && node scripts/robustness-smoke-test.js && node scripts/browser-smoke-test.js && node scripts/update-browser-smoke-test.js",
+    "test:updates": "node --test scripts/update-smoke-test.js && node scripts/update-browser-smoke-test.js",
+    "publish:update-manifest": "node scripts/publish-update-manifest.js",
     "test:api": "node scripts/smoke-test.js && node scripts/api-smoke-test.js",
     "test:browser": "node scripts/browser-smoke-test.js",
     "postinstall": "node scripts/ensure-playwright.js",
@@ -39,19 +41,21 @@
     "equipment-management"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "devDependencies": {
+    "better-sqlite3": "^11.10.0",
     "playwright": "^1.49.1"
   },
   "dependencies": {
-    "adm-zip": "^0.6.0",
-    "better-sqlite3": "^11.7.0",
-    "express": "^4.21.2",
-    "multer": "^1.4.5-lts.1",
-    "pdf-parse": "^1.1.1",
+    "better-sqlite3-multiple-ciphers": "^12.11.1",
+    "express": "^4.22.3",
+    "multer": "^2.4.0",
     "qrcode": "^1.5.4",
-    "tesseract.js": "^7.0.0"
-  },
-  "overrides": {
-    "body-parser": "1.20.6"
+    "tesseract.js": "^7.0.0",
+    "unpdf": "^1.8.1",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
   }
 }

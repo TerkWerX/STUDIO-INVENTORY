@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { debounce, showToast, showModal, showChoiceModal, buildDriverSearchUrl, buildValueEstimateUrl, openLightbox, fileUrl } from './utils.js';
+import { debounce, showToast, showModal, showChoiceModal, closeActiveModal, singleFlight, buildDriverSearchUrl, buildValueEstimateUrl, fileUrl, escapeHtml } from './utils.js';
 import { isWallPhotoCalibrated, warpedWallPreviewDataUrl } from './lib/wall-perspective.js';
 import { wallLengthFt } from './lib/floorplan-geometry.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -11,11 +11,12 @@ import { renderItemForm, collectFormData, bindAutoEstimate, bindBrandSuggest, bi
 import { findItemProfile } from './lib/item-profiles.js';
 import { renderBrandsPage, renderBrandItems } from './views/brands.js';
 import { renderReports, renderInsurance, generatePdf } from './views/reports.js';
+import { insurancePdfTables } from './lib/insurance-rows.mjs';
 import { renderManuals } from './views/manuals.js';
 import { renderAbout, renderBackup } from './views/about.js';
 import { renderLabelsPage, bindLabelsPageEvents, printSingleItemLabel } from './views/labels.js';
 import { renderBinderPage, getBinderOptionsFromDom, getSelectedBinderItemIds } from './views/binder.js';
-import { renderStudioSetup, rackItemsPayload, chainItemsPayload } from './views/studio-setup.js';
+import { renderStudioSetup } from './views/studio-setup.js';
 import { renderStudioBrowse } from './views/studio-browse.js';
 import { initFloorplanEditor } from './lib/floorplan-editor.js';
 import { openWallElevation, showItemQuickMenu } from './lib/wall-elevation.js';
@@ -30,7 +31,7 @@ import {
   renderSoftwareCatalog, renderSoftwareDetail, renderSoftwareForm, collectSoftwareFormData
 } from './views/software.js';
 import { printBinderDocument, printBinderItems, openManualForPrint } from './lib/binder-print.js';
-import { getDymoStatus } from './lib/dymo-labels.js';
+import { getDymoStatus, setDymoEnabled } from './lib/dymo-labels.js';
 import { loadLabelSettings } from './lib/label-settings.js';
 
 const state = {
@@ -41,6 +42,8 @@ const state = {
   filters: { sort: 'name' },
   selectedItemId: null,
   editItemId: null,
+  viewParams: {},
+  formDirty: false,
   manualSearch: '',
   manualFtsQuery: '',
   manualFtsResults: null,
@@ -67,7 +70,7 @@ const state = {
 const container = document.getElementById('view-container');
 let stopCameraScan = null;
 
-const APP_ASSET_VER = '2.7.0';
+const APP_ASSET_VER = '2.9.1';
 
 async function ensureFreshAssets() {
   if (localStorage.getItem('app-asset-ver') === APP_ASSET_VER) return false;
@@ -84,25 +87,9 @@ async function ensureFreshAssets() {
   return true;
 }
 
-async function buildStudioWallSlides(fp) {
-  const photos = fp.wall_photos || {};
-  const edges = Object.keys(photos)
-    .map(k => Number(k))
-    .filter(edge => (photos[edge] || photos[String(edge)])?.path)
-    .sort((a, b) => a - b);
-  const heightFt = fp.ceiling_height || 9.5;
-  return Promise.all(edges.map(async (edge) => {
-    const entry = photos[edge] || photos[String(edge)];
-    const widthFt = wallLengthFt(fp, edge) || fp.bounds_width || 12;
-    const name = `${fp.location} — Wall ${edge + 1}`;
-    const url = isWallPhotoCalibrated(entry)
-      ? await warpedWallPreviewDataUrl(entry.path, entry, widthFt, heightFt)
-      : fileUrl(entry.path);
-    return { edge, url, name };
-  }));
-}
-
 async function init() {
+  installGlobalErrorReporting();
+  api.onOwnerAuthRequired(reauthenticateOwner);
   try {
     if (await ensureFreshAssets()) return;
     const health = await api.health();
@@ -143,9 +130,49 @@ async function init() {
       <div class="empty-state">
         <h3>Cannot connect to server</h3>
         <p>Start the server with <code>npm start</code> from the project folder, then refresh.</p>
-        <p style="margin-top:1rem;color:var(--danger)">${err.message}</p>
+        <p style="margin-top:1rem;color:var(--danger)">${escapeHtml(err.message)}</p>
       </div>`;
   }
+}
+
+/** The owner session ended while the app was open (PIN changed, 30 days passed): ask again. */
+async function reauthenticateOwner() {
+  const pin = await showModal({
+    title: 'Owner PIN Required',
+    message: 'Your sign-in on this device has ended. Enter the owner PIN to keep editing.',
+    confirmText: 'Unlock',
+    cancelText: 'Cancel',
+    prompt: true,
+    promptType: 'password',
+    promptPlaceholder: 'Owner PIN'
+  });
+  if (!pin) return false;
+  try {
+    await api.ownerLogin(pin);
+    state.ownerAuth = await api.authStatus();
+    return true;
+  } catch (err) {
+    showToast(err.message, 'error');
+    return false;
+  }
+}
+
+/** Anything that fails without its own error handling still tells the user. */
+function installGlobalErrorReporting() {
+  let lastMessage = '';
+  let lastAt = 0;
+  const report = (error) => {
+    const message = error?.message || String(error || 'Something went wrong');
+    if (message === lastMessage && Date.now() - lastAt < 3000) return;
+    lastMessage = message;
+    lastAt = Date.now();
+    console.error(error);
+    showToast(message, 'error');
+  };
+  window.addEventListener('unhandledrejection', (event) => report(event.reason));
+  window.addEventListener('error', (event) => {
+    if (event instanceof ErrorEvent && event.error) report(event.error);
+  });
 }
 
 async function ensureOwnerAccess() {
@@ -195,11 +222,10 @@ async function ensureOwnerAccess() {
     state.ownerAuth = await api.authStatus();
     return true;
   } catch (err) {
-    api.setOwnerToken('');
     container.innerHTML = `
       <div class="empty-state">
         <h3>Could Not Unlock</h3>
-        <p style="color:var(--danger)">${err.message}</p>
+        <p style="color:var(--danger)">${escapeHtml(err.message)}</p>
       </div>`;
     return false;
   }
@@ -210,6 +236,8 @@ function updateSidebarVersion(health) {
   const version = health.version ? `v${health.version}` : '';
   const count = Number.isFinite(Number(health.itemCount)) ? `${health.itemCount} items` : '';
   label.textContent = [count, version].filter(Boolean).join(' · ') || 'Studio Inventory';
+  const aboutVersion = document.getElementById('about-app-version');
+  if (aboutVersion) aboutVersion.textContent = version;
 }
 
 function setupMobileNav() {
@@ -224,46 +252,92 @@ function setupMobileNav() {
   });
 }
 
-async function checkForAppUpdate() {
+async function checkForAppUpdate(force = false) {
+  const button = document.getElementById('app-check-updates');
+  const status = document.getElementById('app-update-status');
+  const download = document.getElementById('app-download-update');
+  const notes = document.getElementById('app-update-notes');
+  if (button) button.disabled = true;
+  if (status) status.textContent = 'Checking TerkWerX for updates…';
+  download?.classList.add('hidden');
+  if (notes) notes.textContent = '';
   try {
-    const info = await api.updateCheck();
-    if (!info.updateAvailable || !info.latestVersion) return;
+    const info = await api.updateCheck(force);
+    document.getElementById('update-banner')?.classList.add('hidden');
+    if (info.error) throw new Error(info.error);
+    if (info.skipped) {
+      if (status) status.textContent = 'Update checks are disabled on this server.';
+      return;
+    }
+    if (!info.latestVersion) throw new Error('No release information was returned.');
+    if (status) status.textContent = info.updateAvailable
+      ? `Version ${info.latestVersion} is available. You have ${info.currentVersion}.${info.installer ? '' : ' No compatible installer is published for this server’s platform yet.'}${info.local === false ? ' Install the update on the studio computer running the server, not this phone or tablet.' : ''}`
+      : `You’re up to date. Installed: ${info.currentVersion}; latest on TerkWerX: ${info.latestVersion}.`;
+    if (!info.updateAvailable) return;
+    if (notes) notes.textContent = info.releaseNotes || '';
+    if (download) {
+      download.classList.remove('hidden');
+      download.textContent = info.installer ? 'Get Update' : 'View Downloads';
+      download.onclick = () => guideAppUpdate(info);
+    }
 
     const dismissed = localStorage.getItem('dismissedUpdateVersion');
-    if (dismissed === info.latestVersion) return;
+    if (!force && dismissed === info.latestVersion) return;
 
     const banner = document.getElementById('update-banner');
     const text = document.getElementById('update-banner-text');
-    text.textContent = `Studio Inventory v${info.latestVersion} is available (you have v${info.currentVersion}). Your inventory data is kept when you install the update.`;
+    text.textContent = `Studio Inventory v${info.latestVersion} is available from TerkWerX (you have v${info.currentVersion}). Get the download and update instructions.`;
 
-    document.getElementById('update-banner-download').onclick = () => {
-      window.open(info.releaseUrl, '_blank', 'noopener');
-    };
+    document.getElementById('update-banner-download').onclick = () => guideAppUpdate(info);
     document.getElementById('update-banner-dismiss').onclick = () => {
       localStorage.setItem('dismissedUpdateVersion', info.latestVersion);
       banner.classList.add('hidden');
     };
 
     banner.classList.remove('hidden');
-  } catch {
-    /* offline or GitHub unreachable */
+  } catch (error) {
+    if (status) status.textContent = `Could not check TerkWerX for updates. Your installed app still works. Try again when connected. (${error.message})`;
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
-function showBackupBanner() {
-  const last = localStorage.getItem('lastBackup');
-  const week = 7 * 24 * 60 * 60 * 1000;
-  if (!last || Date.now() - parseInt(last, 10) > week) {
-    document.getElementById('backup-banner').classList.remove('hidden');
+async function guideAppUpdate(info) {
+  if (!info.installer) {
+    window.open(info.releaseUrl, '_blank', 'noopener');
+    return;
   }
+  const steps = info.platform === 'win32'
+    ? 'Run the downloaded Setup.exe and choose the same installation folder. Then launch Studio Inventory again.'
+    : info.platform === 'darwin'
+      ? 'Open the downloaded disk image and run Install Studio Inventory.command. Then start Studio Inventory from Applications.'
+      : 'Extract the downloaded archive and run Install Studio Inventory.sh. Then start Studio Inventory from your applications menu.';
+  const action = await showChoiceModal({
+    title: `Update to Studio Inventory ${info.latestVersion}`,
+    message: `${info.local === false ? 'Update the studio computer running the server, not this device. ' : ''}Save a Full Backup ZIP first. Stop the Studio Inventory server before installing; closing the browser is not enough. ${steps} Your existing data folder is preserved. Download size: ${Math.round(info.installer.size / 1000000)} MB. See Help & About for portable and custom-folder instructions.`,
+    choices: [
+      { id: 'backup', label: 'Back Up First', primary: true },
+      { id: 'download', label: 'Download Installer' },
+      { id: 'website', label: 'Portable Downloads & Instructions' }
+    ]
+  });
+  if (action === 'backup') navigate('backup');
+  if (action === 'download') window.open(info.installer.url, '_blank', 'noopener');
+  if (action === 'website') window.open(info.releaseUrl, '_blank', 'noopener');
+}
+
+function showBackupBanner() {
+  api.backupFolder().then((backup) => {
+    if (backup?.warn) document.getElementById('backup-banner')?.classList.remove('hidden');
+  }).catch(() => {
+    document.getElementById('backup-banner')?.classList.remove('hidden');
+  });
   document.getElementById('backup-banner-dismiss').onclick = () => {
     document.getElementById('backup-banner').classList.add('hidden');
   };
   document.getElementById('backup-banner-export').onclick = () => {
-    api.exportJson();
-    localStorage.setItem('lastBackup', String(Date.now()));
+    navigate('backup');
     document.getElementById('backup-banner').classList.add('hidden');
-    showToast('Backup exported', 'success');
   };
 }
 
@@ -307,9 +381,15 @@ function setupKeyboard() {
       }
     }
     if (e.key === 'Escape') {
-      document.getElementById('modal-overlay').classList.add('hidden');
-      document.getElementById('lightbox-overlay')?.classList.add('hidden');
-      if (state.view === 'item-detail') navigate('inventory');
+      // Close the top-most thing only: an open question (answered as Cancel), then the lightbox.
+      if (closeActiveModal()) return;
+      const lightbox = document.getElementById('lightbox-overlay');
+      if (lightbox && !lightbox.classList.contains('hidden')) {
+        lightbox.classList.add('hidden');
+        return;
+      }
+      const typing = e.target instanceof HTMLElement && e.target.matches('input, textarea, select, [contenteditable="true"]');
+      if (state.view === 'item-detail' && !typing) navigate('inventory');
     }
   });
 }
@@ -325,29 +405,77 @@ function setActiveNav(view) {
   });
 }
 
+let navSeq = 0;
+
+/**
+ * Re-render a view after a slow action (an upload, a download), but only if
+ * the user is still looking at it. If they moved on, they keep their place.
+ */
+function refreshIfShowing(view, params = {}) {
+  if (state.view !== view) return Promise.resolve();
+  if (params.id && String(state.viewParams?.id) !== String(params.id)) return Promise.resolve();
+  return navigate(view, params);
+}
+const STALE_NAVIGATION = new Error('stale navigation');
+
+function showNavigationError(err) {
+  container.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${escapeHtml(err.message)}</p></div>`;
+  showToast(err.message, 'error');
+}
+
 async function navigate(view, params = {}) {
+  // Leaving (or re-opening) a form with unsaved changes asks first.
+  if (state.formDirty) {
+    const discard = await showModal({
+      title: 'Discard unsaved changes?',
+      message: 'This form has changes that are not saved yet.',
+      confirmText: 'Discard changes',
+      cancelText: 'Keep editing',
+      danger: true
+    });
+    if (!discard) {
+      setActiveNav(state.view);
+      return;
+    }
+    state.formDirty = false;
+  }
+  // Only the latest navigation may render: a slow response for a view the user
+  // already left (or for an older search) is dropped instead of replacing the page.
+  const seq = ++navSeq;
+  const sameView = state.view === view;
+  const active = document.activeElement;
+  const refocus = sameView && active?.id && active.matches?.('input, textarea') ? active : null;
+  const page = {
+    get innerHTML() { return container.innerHTML; },
+    set innerHTML(html) {
+      if (seq !== navSeq) throw STALE_NAVIGATION;
+      container.innerHTML = html;
+    }
+  };
   if (state.view === 'scan' && view !== 'scan') {
     stopCameraScan?.();
     stopCameraScan = null;
   }
   if (view !== 'item-detail') cleanupPhotoZoneListeners();
   state.view = view;
+  state.viewParams = params;
   document.getElementById('main-content')?.classList.toggle('studio-browse-active', view === 'studio-view');
   setActiveNav(view);
-  container.innerHTML = '<p style="color:var(--text-muted);padding:2rem">Loading...</p>';
+  // Re-rendering the same view (a new search, say) keeps the current page until the new one is ready.
+  if (!sameView) container.innerHTML = '<p style="color:var(--text-muted);padding:2rem">Loading...</p>';
 
   try {
     switch (view) {
       case 'dashboard':
         state.stats = await api.stats();
         state.brands = await api.brands();
-        container.innerHTML = renderDashboard(state.stats, state.brands);
+        page.innerHTML = renderDashboard(state.stats, state.brands);
         bindDashboardEvents();
         bindBrandFilterEvents();
         break;
 
       case 'scan':
-        container.innerHTML = renderScanLookup();
+        page.innerHTML = renderScanLookup();
         bindScanLookupEvents();
         break;
 
@@ -362,7 +490,7 @@ async function navigate(view, params = {}) {
         ]);
         state.items = Array.isArray(allItems) ? allItems : [];
         state.floorplans = Array.isArray(floorplans) ? floorplans : [];
-        container.innerHTML = renderStudioSetup({
+        page.innerHTML = renderStudioSetup({
           map,
           racks: Array.isArray(racks) ? racks : [],
           chains: Array.isArray(chains) ? chains : [],
@@ -376,7 +504,7 @@ async function navigate(view, params = {}) {
 
       case 'studio-view': {
         state.floorplans = await api.floorplans();
-        container.innerHTML = renderStudioBrowse(
+        page.innerHTML = renderStudioBrowse(
           state.floorplans,
           state.studioBrowseFpId,
           state.studioBrowseHighlightItemId
@@ -386,12 +514,17 @@ async function navigate(view, params = {}) {
         break;
       }
 
-      case 'brands':
-        state.brands = await api.brands();
-        container.innerHTML = renderBrandsPage(state.brands);
+      case 'brands': {
+        const [brands, logoSettings] = await Promise.all([
+          api.brands(),
+          api.brandLogoSettings().catch(() => ({ lookups: false }))
+        ]);
+        state.brands = brands;
+        page.innerHTML = renderBrandsPage(state.brands, { logoLookups: !!logoSettings.lookups });
         bindBrandFilterEvents();
         bindBrandsPageEvents();
         break;
+      }
 
       case 'brand-items':
         state.selectedBrand = params.brand ?? state.selectedBrand ?? '';
@@ -402,13 +535,13 @@ async function navigate(view, params = {}) {
         if (state.selectedBrand) {
           try { brandInfo = await api.brand(state.selectedBrand); } catch { /* custom */ }
         }
-        container.innerHTML = renderBrandItems(state.selectedBrand, brandInfo, state.items);
+        page.innerHTML = renderBrandItems(state.selectedBrand, brandInfo, state.items);
         bindBrandItemsEvents();
         break;
 
       case 'loans': {
         const loanData = await api.loans();
-        container.innerHTML = renderLoans(loanData);
+        page.innerHTML = renderLoans(loanData);
         bindLoansEvents();
         break;
       }
@@ -416,15 +549,16 @@ async function navigate(view, params = {}) {
       case 'inventory':
         state.items = await api.items({
           ...state.filters,
-          include_accessories: state.filters.show_accessories ? '1' : undefined
+          include_accessories: state.filters.show_accessories ? '1' : undefined,
+          include_former: state.filters.show_former ? '1' : undefined
         });
-        container.innerHTML = renderInventory(state.items, state.meta, state.filters);
+        page.innerHTML = renderInventory(state.items, state.meta, state.filters);
         bindInventoryEvents();
         break;
 
       case 'item-detail':
         const item = await api.item(params.id || state.selectedItemId);
-        container.innerHTML = renderItemDetail(item, state.meta);
+        page.innerHTML = renderItemDetail(item, state.meta);
         bindDetailEvents(item);
         bindPhotoDropZone(container, item, {
           onUpload: async (itemId, files) => {
@@ -438,8 +572,12 @@ async function navigate(view, params = {}) {
         break;
 
       case 'item-form': {
-        const editItem = state.editItemId
-          ? await api.item(state.editItemId)
+        // The id to edit applies to this one visit only. Leaving it set would make a
+        // later "Add Item" open (and overwrite) the item edited before.
+        const editId = params.id || state.editItemId;
+        state.editItemId = null;
+        const editItem = editId
+          ? await api.item(editId)
           : (state.itemDraft || (state.parentItemId ? { parent_item_id: state.parentItemId } : null));
         const [parentItems, brands] = await Promise.all([
           api.items({ sort: 'name', include_accessories: '1' }),
@@ -447,7 +585,7 @@ async function navigate(view, params = {}) {
         ]);
         state.brands = brands;
         state.meta = { ...state.meta, brands, parentItems };
-        container.innerHTML = renderItemForm(editItem, state.meta);
+        page.innerHTML = renderItemForm(editItem, state.meta);
         state.parentItemId = null;
         state.itemDraft = null;
         bindFormEvents();
@@ -456,7 +594,7 @@ async function navigate(view, params = {}) {
 
       case 'software': {
         const licenses = await api.software(state.softwareFilters);
-        container.innerHTML = renderSoftwareCatalog(licenses, state.softwareFilters);
+        page.innerHTML = renderSoftwareCatalog(licenses, state.softwareFilters);
         bindSoftwareEvents();
         break;
       }
@@ -465,7 +603,7 @@ async function navigate(view, params = {}) {
         const swId = params.id || state.selectedSoftwareId;
         const sw = await api.softwareItem(swId);
         state.selectedSoftwareId = sw.id;
-        container.innerHTML = renderSoftwareDetail(sw);
+        page.innerHTML = renderSoftwareDetail(sw);
         bindSoftwareDetailEvents(sw);
         break;
       }
@@ -474,7 +612,7 @@ async function navigate(view, params = {}) {
         state.meta = state.meta || await api.meta();
         const editSw = state.editSoftwareId ? await api.softwareItem(state.editSoftwareId) : null;
         const hostItems = await api.items({ sort: 'name' });
-        container.innerHTML = renderSoftwareForm(editSw, { ...state.meta, hostItems });
+        page.innerHTML = renderSoftwareForm(editSw, { ...state.meta, hostItems });
         bindSoftwareFormEvents(editSw);
         break;
       }
@@ -489,7 +627,7 @@ async function navigate(view, params = {}) {
         state.items = Array.isArray(items) ? items : [];
         state.manualInbox = manualInbox || { dir: '', files: [] };
         state.pdfSearchEnabled = guestInfo.pdfSearchEnabled !== false;
-        container.innerHTML = renderManuals(manuals, {
+        page.innerHTML = renderManuals(manuals, {
           searchQuery: state.manualSearch,
           ftsQuery: state.manualFtsQuery,
           ftsResults: state.manualFtsResults,
@@ -502,64 +640,82 @@ async function navigate(view, params = {}) {
         break;
       }
 
-      case 'labels':
+      case 'labels': {
         state.items = await api.items({ sort: 'name' });
+        // Tell the DYMO module what the owner allowed before anything tries to load it.
+        const dymoSettings = await api.dymoSettings().catch(() => ({ enabled: false, scriptOrigin: '' }));
+        setDymoEnabled(dymoSettings.enabled, dymoSettings.scriptOrigin);
         const dymoStatus = await getDymoStatus();
         const labelSettings = loadLabelSettings();
         if (!labelSettings.baseUrl) labelSettings.baseUrl = window.location.origin;
-        container.innerHTML = renderLabelsPage(state.items, labelSettings, dymoStatus, state.labelPreselectId);
+        page.innerHTML = renderLabelsPage(state.items, labelSettings, dymoStatus, state.labelPreselectId);
         bindLabelsPageEvents({
           items: state.items,
           onToast: showToast,
           onGetScanUrl: async (itemId, baseUrl) => (await api.scanLink(itemId, baseUrl)).url,
-          onRefreshStatus: async () => {
-            const s = await getDymoStatus();
-            if (!s.printers?.length) return;
-          }
+          onSetDymoEnabled: (enabled) => api.updateDymoSettings(enabled),
+          // DYMO printers are listed when the page opens; nothing to refresh on focus.
         });
         state.labelPreselectId = null;
         break;
+      }
 
       case 'binder':
         state.items = await api.items({ sort: 'name' });
         state.stats = state.stats || await api.stats();
         const binderSettings = loadLabelSettings();
-        container.innerHTML = renderBinderPage(state.items, state.stats, binderSettings.studioName);
+        page.innerHTML = renderBinderPage(state.items, state.stats, binderSettings.studioName);
         bindBinderEvents();
         break;
 
       case 'reports':
         state.items = await api.items({ sort: 'name' });
         state.stats = state.stats || await api.stats();
-        container.innerHTML = renderReports(state.items, state.stats);
+        page.innerHTML = renderReports(state.items, state.stats);
         bindReportEvents();
         break;
 
       case 'insurance':
-        state.items = await api.items({ sort: 'value' });
-        container.innerHTML = renderInsurance(state.items);
+        state.items = await api.items({ sort: 'value', include_former: '1', include_accessories: '1' });
+        page.innerHTML = renderInsurance(state.items);
         bindInsuranceEvents();
         break;
 
       case 'backup': {
-        const [guestSettings, ownerAuth] = await Promise.all([api.guestSettings(), api.authStatus()]);
+        const [guestSettings, ownerAuth, folderBackup] = await Promise.all([
+          api.guestSettings(), api.authStatus(), api.backupFolder()
+        ]);
         state.ownerAuth = ownerAuth;
-        container.innerHTML = renderBackup(guestSettings, ownerAuth);
+        page.innerHTML = renderBackup(guestSettings, ownerAuth, folderBackup);
         bindBackupEvents();
         break;
       }
 
       case 'about':
-        container.innerHTML = renderAbout();
+        page.innerHTML = renderAbout();
+        document.getElementById('app-check-updates').onclick = () => checkForAppUpdate(true);
+        bindServerLogEvents();
+        bindStopServerEvents();
         break;
     }
 
-    const health = await api.health();
-    updateSidebarVersion(health);
-    document.getElementById('main-content').focus();
+    if (seq !== navSeq) return;
+    state.formDirty = false; // a freshly rendered form has no edits yet (set-up code may fire change events)
+    const field = refocus && document.getElementById(refocus.id);
+    if (field && field !== refocus) {
+      // Keep typing where it was: same field, same caret, plus anything typed while loading.
+      const typedMeanwhile = /search|filter|query/.test(refocus.id) && refocus.value !== field.value;
+      if (typedMeanwhile) field.value = refocus.value;
+      field.focus();
+      try { field.setSelectionRange(refocus.selectionStart, refocus.selectionEnd); } catch { /* not a text field */ }
+      if (typedMeanwhile) field.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (!field) {
+      document.getElementById('main-content').focus();
+    }
+    api.health().then(updateSidebarVersion).catch(() => {});
   } catch (err) {
-    container.innerHTML = `<div class="empty-state"><h3>Error</h3><p>${err.message}</p></div>`;
-    showToast(err.message, 'error');
+    if (err === STALE_NAVIGATION || seq !== navSeq) return;
+    showNavigationError(err);
   }
 }
 
@@ -575,9 +731,6 @@ function bindDashboardEvents() {
       state.selectedSoftwareId = el.dataset.id;
       navigate('software-detail', { id: el.dataset.id });
     });
-  });
-  container.querySelectorAll('[data-nav]').forEach(btn => {
-    btn.addEventListener('click', () => navigate(btn.dataset.nav));
   });
 }
 
@@ -607,6 +760,17 @@ function bindBrandFilterEvents() {
 }
 
 function bindBrandsPageEvents() {
+  document.getElementById('brand-logo-lookups')?.addEventListener('change', async (e) => {
+    try {
+      const saved = await api.updateBrandLogoSettings(e.target.checked);
+      e.target.checked = !!saved.lookups;
+      showToast(saved.lookups ? 'New brands will get logos from the web' : 'Logo lookups stay on this computer', 'success');
+    } catch (err) {
+      e.target.checked = !e.target.checked;
+      showToast(err.message, 'error');
+    }
+  });
+
   container.querySelector('[data-action="fetch-all-logos"]')?.addEventListener('click', async () => {
     showToast('Fetching logos for all brands in your inventory...', 'info');
     try {
@@ -629,7 +793,7 @@ function bindBrandsPageEvents() {
     if (label) label.textContent = e.target.files[0]?.name || '';
   });
 
-  document.getElementById('brand-logo-form')?.addEventListener('submit', async (e) => {
+  document.getElementById('brand-logo-form')?.addEventListener('submit', singleFlight(async (e) => {
     e.preventDefault();
     const name = document.getElementById('custom-brand-name').value.trim();
     const file = document.getElementById('custom-brand-logo').files[0];
@@ -639,7 +803,7 @@ function bindBrandsPageEvents() {
       showToast(`Logo uploaded for ${name}`, 'success');
       navigate('brands');
     } catch (err) { showToast(err.message, 'error'); }
-  });
+  }));
 }
 
 function bindBrandItemsEvents() {
@@ -662,6 +826,7 @@ function bindInventoryEvents() {
     state.filters.max_value = document.getElementById('filter-max-value').value;
     state.filters.sort = document.getElementById('filter-sort').value;
     state.filters.show_accessories = document.getElementById('filter-show-accessories')?.checked || false;
+    state.filters.show_former = document.getElementById('filter-show-former')?.checked || false;
     navigate('inventory');
   }, 350);
 
@@ -670,6 +835,7 @@ function bindInventoryEvents() {
     document.getElementById(id)?.addEventListener('change', doSearch);
   });
   document.getElementById('filter-show-accessories')?.addEventListener('change', doSearch);
+  document.getElementById('filter-show-former')?.addEventListener('change', doSearch);
   ['filter-min-value', 'filter-max-value'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', doSearch);
   });
@@ -685,13 +851,9 @@ function bindInventoryEvents() {
     });
   });
 
-  container.querySelectorAll('[data-nav]').forEach(el => {
-    el.addEventListener('click', () => navigate(el.dataset.nav));
-  });
 }
 
 function bindDetailEvents(item) {
-  container.querySelector('[data-nav="inventory"]')?.addEventListener('click', () => navigate('inventory'));
 
   const phoneQr = container.querySelector('[data-phone-upload-qr]');
   const phoneLink = container.querySelector('[data-phone-upload-link]');
@@ -711,7 +873,7 @@ function bindDetailEvents(item) {
 
   container.querySelector('[data-action="wall-cutout-edit"]')?.addEventListener('click', async () => {
     await openWallCutoutForItem(item, {
-      onDone: () => navigate('item-detail', { id: item.id })
+      onDone: () => refreshIfShowing('item-detail', { id: item.id })
     });
   });
 
@@ -727,7 +889,7 @@ function bindDetailEvents(item) {
     try {
       await api.clearWallCutout(item.id);
       showToast('Wall cutout removed', 'success');
-      navigate('item-detail', { id: item.id });
+      refreshIfShowing('item-detail', { id: item.id });
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -743,7 +905,7 @@ function bindDetailEvents(item) {
       racks,
       api,
       onToast: showToast,
-      onDone: () => navigate('item-detail', { id: item.id })
+      onDone: () => refreshIfShowing('item-detail', { id: item.id })
     });
   });
 
@@ -843,7 +1005,7 @@ function bindDetailEvents(item) {
           : 'Item checked out',
         'success'
       );
-      navigate('item-detail', { id: item.id });
+      refreshIfShowing('item-detail', { id: item.id });
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -862,7 +1024,7 @@ function bindDetailEvents(item) {
       if (returned.wall_rehang_pending) {
         await promptWallRehang(item, returned.wall_placement);
       }
-      navigate('item-detail', { id: item.id });
+      refreshIfShowing('item-detail', { id: item.id });
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -880,14 +1042,14 @@ function bindDetailEvents(item) {
       try {
         await api.deleteLoan(btn.dataset.id);
         showToast('Loan record removed', 'success');
-        navigate('item-detail', { id: item.id });
+        refreshIfShowing('item-detail', { id: item.id });
       } catch (err) {
         showToast(err.message, 'error');
       }
     });
   });
 
-  document.getElementById('maintenance-form')?.addEventListener('submit', async (e) => {
+  document.getElementById('maintenance-form')?.addEventListener('submit', singleFlight(async (e) => {
     e.preventDefault();
     try {
       await api.addMaintenance(item.id, {
@@ -896,18 +1058,18 @@ function bindDetailEvents(item) {
         note: document.getElementById('maint-note').value
       });
       showToast('Service entry added', 'success');
-      navigate('item-detail', { id: item.id });
+      refreshIfShowing('item-detail', { id: item.id });
     } catch (err) {
       showToast(err.message, 'error');
     }
-  });
+  }));
 
   container.querySelectorAll('[data-action="delete-maintenance"]').forEach(btn => {
     btn.addEventListener('click', async () => {
       try {
         await api.deleteMaintenance(btn.dataset.id);
         showToast('Entry removed', 'success');
-        navigate('item-detail', { id: item.id });
+        refreshIfShowing('item-detail', { id: item.id });
       } catch (err) {
         showToast(err.message, 'error');
       }
@@ -918,18 +1080,33 @@ function bindDetailEvents(item) {
     state.editItemId = item.id;
     navigate('item-form');
   });
-  container.querySelector('[data-action="delete-item"]')?.addEventListener('click', async () => {
-    const ok = await showModal({
-      title: 'Delete Item',
-      message: `Are you sure you want to delete "${item.name}"? This cannot be undone.`,
-      confirmText: 'Delete', danger: true
-    });
-    if (ok) {
-      await api.deleteItem(item.id);
-      showToast('Item deleted', 'success');
-      navigate('inventory');
-    }
+  container.querySelector('[data-action="former-item"]')?.addEventListener('click', () => {
+    document.getElementById('former-panel')?.classList.remove('hidden');
+    document.getElementById('former-date')?.focus();
   });
+  document.getElementById('former-save')?.addEventListener('click', singleFlight(async () => {
+    try {
+      await api.updateItem(item.id, {
+        studio_status: document.getElementById('former-status')?.value || 'sold',
+        disposition_date: document.getElementById('former-date')?.value || '',
+        studio_status_note: document.getElementById('former-note')?.value || ''
+      });
+      showToast('Record kept, and the item left the insured total', 'success');
+      refreshIfShowing('item-detail', { id: item.id });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }));
+  document.getElementById('erase-item')?.addEventListener('click', singleFlight(async () => {
+    const confirmName = document.getElementById('erase-name')?.value || '';
+    try {
+      await api.deleteItem(item.id, { erase: true, confirmName });
+      showToast('Duplicate erased', 'success');
+      navigate('inventory');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }));
 
   container.querySelector('[data-action="auto-estimate"]')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
@@ -946,7 +1123,7 @@ function bindDetailEvents(item) {
         replacement_value_note: item.replacement_value_note || `Reverb/eBay estimate (${new Date().toLocaleDateString()})`
       });
       showToast('Replacement value updated', 'success');
-      navigate('item-detail', { id: item.id });
+      refreshIfShowing('item-detail', { id: item.id });
     }
   });
 
@@ -963,16 +1140,15 @@ function bindDetailEvents(item) {
   container.querySelector('[data-action="manual-inbox-import"]')?.addEventListener('click', () => {
     promptImportManualFromInbox(item.id, {
       itemName: item.name,
-      onDone: () => navigate('item-detail', { id: item.id })
+      onDone: () => refreshIfShowing('item-detail', { id: item.id })
     });
   });
 
-  container.querySelector('[data-action="archive-manual-url"]')?.addEventListener('click', () => {
+  container.querySelector('[data-action="archive-manual-url"]')?.addEventListener('click', singleFlight(() =>
     promptArchiveManualFromUrl(item.id, {
       itemName: item.name,
-      onDone: () => navigate('item-detail', { id: item.id })
-    });
-  });
+      onDone: () => refreshIfShowing('item-detail', { id: item.id })
+    })));
 
   container.querySelector('[data-action="upload-photos"]')?.addEventListener('change', async (e) => {
     const files = filterImageFiles(e.target.files);
@@ -980,7 +1156,7 @@ function bindDetailEvents(item) {
     try {
       await api.uploadPhotos(item.id, files);
       showToast(`${files.length} photo(s) uploaded`, 'success');
-      navigate('item-detail', { id: item.id });
+      refreshIfShowing('item-detail', { id: item.id });
     } catch (err) { showToast(err.message, 'error'); }
     e.target.value = '';
   });
@@ -991,34 +1167,56 @@ function bindDetailEvents(item) {
     try {
       await api.uploadReceipt(item.id, file);
       showToast('Receipt uploaded', 'success');
-      navigate('item-detail', { id: item.id });
+      refreshIfShowing('item-detail', { id: item.id });
     } catch (err) { showToast(err.message, 'error'); }
     e.target.value = '';
   });
 
   container.querySelector('[data-action="upload-manual"]')?.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
     try {
-      await api.uploadManual(item.id, file);
-      showToast('Document uploaded', 'success');
-      navigate('item-detail', { id: item.id });
+      await api.uploadManual(item.id, files);
+      showToast(files.length === 1 ? 'Document uploaded' : `${files.length} documents uploaded`, 'success');
+      refreshIfShowing('item-detail', { id: item.id });
     } catch (err) { showToast(err.message, 'error'); }
+    e.target.value = '';
   });
 
   container.querySelector('[data-action="upload-software"]')?.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
+    const input = e.target;
+    const file = input.files[0];
     if (!file) return;
-    const version = prompt('Version (optional):') || '';
-    const description = prompt('Description (optional):') || '';
     try {
-      await api.uploadSoftware(item.id, file, version, description);
+      const version = await showModal({
+        title: 'Archive Software File',
+        message: 'Version (optional)',
+        confirmText: 'Next',
+        prompt: true,
+        promptType: 'text',
+        promptPlaceholder: 'e.g. 2.4.1'
+      });
+      if (version === null) return;
+      const description = await showModal({
+        title: 'Archive Software File',
+        message: 'Description (optional)',
+        confirmText: 'Archive',
+        prompt: true,
+        promptType: 'text',
+        promptPlaceholder: 'e.g. Windows driver'
+      });
+      if (description === null) return;
+      await api.uploadSoftware(item.id, file, version.trim(), description.trim());
       showToast('Software file archived', 'success');
-      navigate('item-detail', { id: item.id });
-    } catch (err) { showToast(err.message, 'error'); }
+      refreshIfShowing('item-detail', { id: item.id });
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      input.value = ''; // so choosing the same file again (after a failure) works
+    }
   });
 
-  document.getElementById('software-archive-form')?.addEventListener('submit', async (e) => {
+  document.getElementById('software-archive-form')?.addEventListener('submit', singleFlight(async (e) => {
     e.preventDefault();
     const url = document.getElementById('sw-url').value;
     const version = document.getElementById('sw-version').value;
@@ -1027,9 +1225,9 @@ function bindDetailEvents(item) {
       showToast('Downloading from manufacturer URL...', 'info');
       await api.archiveSoftware(item.id, url, version, description);
       showToast('Software archived successfully', 'success');
-      navigate('item-detail', { id: item.id });
+      refreshIfShowing('item-detail', { id: item.id });
     } catch (err) { showToast(err.message, 'error'); }
-  });
+  }));
 
   container.querySelectorAll('[data-action="delete-attachment"]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1037,13 +1235,29 @@ function bindDetailEvents(item) {
       if (ok) {
         await api.deleteAttachment(btn.dataset.id);
         showToast('File removed', 'success');
-        navigate('item-detail', { id: item.id });
+        refreshIfShowing('item-detail', { id: item.id });
       }
     });
   });
 }
 
+/** Remember that a form has unsaved edits, so leaving it asks first. */
+function trackUnsavedChanges(form) {
+  if (!form) return;
+  state.formDirty = false;
+  const markDirty = () => { state.formDirty = true; };
+  form.addEventListener('input', markDirty);
+  form.addEventListener('change', markDirty);
+}
+
+window.addEventListener('beforeunload', (event) => {
+  if (!state.formDirty) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
 function bindFormEvents() {
+  trackUnsavedChanges(document.getElementById('item-form'));
   const tagContainer = document.getElementById('tag-container');
   const tagInput = document.getElementById('tag-input');
   bindItemFormMode();
@@ -1059,7 +1273,11 @@ function bindFormEvents() {
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
     chip.dataset.tag = n;
-    chip.innerHTML = `${n} <button type="button" data-remove-tag>&times;</button>`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.dataset.removeTag = '';
+    remove.textContent = '×';
+    chip.append(document.createTextNode(`${n} `), remove);
     tagContainer.insertBefore(chip, tagInput);
     tagInput.value = '';
   }
@@ -1080,21 +1298,21 @@ function bindFormEvents() {
     btn.addEventListener('click', () => addTag(btn.dataset.addTag));
   });
 
-  document.getElementById('item-form')?.addEventListener('submit', async (e) => {
+  document.getElementById('item-form')?.addEventListener('submit', singleFlight(async (e) => {
     e.preventDefault();
     const data = collectFormData();
     const id = document.getElementById('item-id').value;
     try {
       if (id) {
         await api.updateItem(id, data);
+        state.formDirty = false;
         showToast('Item updated', 'success');
-        if (data.brand) fetchLogoForBrand(data.brand);
         state.selectedItemId = id;
         navigate('item-detail', { id });
       } else {
         const created = await api.createItem(data);
+        state.formDirty = false;
         showToast('Item added', 'success');
-        if (data.brand) fetchLogoForBrand(data.brand);
         state.selectedItemId = created.id;
 
         if (data.parent_item_id) {
@@ -1136,9 +1354,8 @@ function bindFormEvents() {
     } catch (err) {
       showToast(err.message, 'error');
     }
-  });
+  }));
 
-  container.querySelector('[data-nav="inventory"]')?.addEventListener('click', () => navigate('inventory'));
   bindAutoEstimate();
   bindBrandSuggest(state.brands || state.meta?.brands || []);
 }
@@ -1328,12 +1545,11 @@ function bindManualEvents(manuals, items = []) {
   });
 
   container.querySelectorAll('[data-action="archive-manual-url"]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', singleFlight(() =>
       promptArchiveManualFromUrl(btn.dataset.id, {
         itemName: btn.dataset.name || '',
         onDone: () => navigate('manuals')
-      });
-    });
+      })));
   });
 
   container.querySelector('[data-action="open-manual-inbox"]')?.addEventListener('click', async () => {
@@ -1371,10 +1587,21 @@ function bindManualEvents(manuals, items = []) {
     });
   });
 
+  container.querySelectorAll('[data-action="manual-web-search-kind"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      runManualWebSearch(btn.dataset.id, {
+        itemName: btn.dataset.name || '',
+        kind: btn.dataset.kind || 'all',
+        query: ''
+      });
+    });
+  });
+
   container.querySelector('[data-action="manual-web-search-go"]')?.addEventListener('click', (e) => {
     const btn = e.currentTarget;
     runManualWebSearch(btn.dataset.id, {
       itemName: btn.dataset.name || '',
+      kind: state.manualFinder?.kind || 'all',
       query: document.getElementById('manual-web-query')?.value || ''
     });
   });
@@ -1385,20 +1612,18 @@ function bindManualEvents(manuals, items = []) {
     if (!btn) return;
     runManualWebSearch(btn.dataset.id, {
       itemName: btn.dataset.name || '',
+      kind: state.manualFinder?.kind || 'all',
       query: e.currentTarget.value || ''
     });
   });
 
   container.querySelectorAll('[data-action="scan-manual-result"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      scanManualResultPage(btn.dataset.id, btn.dataset.url);
-    });
+    btn.addEventListener('click', singleFlight(() => scanManualResultPage(btn.dataset.id, btn.dataset.url)));
   });
 
   container.querySelectorAll('[data-action="archive-manual-result"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      archiveManualResult(btn.dataset.id, btn.dataset.url);
-    });
+    btn.addEventListener('click', singleFlight(() =>
+      archiveManualResult(btn.dataset.id, btn.dataset.url, btn.dataset.description || '')));
   });
 
   container.querySelectorAll('[data-action="print-manual-pdf"]').forEach(btn => {
@@ -1546,19 +1771,9 @@ function bindLoansEvents() {
     });
   });
 
-  container.querySelectorAll('[data-nav]').forEach(el => {
-    el.addEventListener('click', () => navigate(el.dataset.nav));
-  });
 }
 
 function bindSoftwareEvents() {
-  container.querySelectorAll('[data-nav="software-form"]').forEach(el => {
-    el.addEventListener('click', () => {
-      state.editSoftwareId = null;
-      navigate('software-form');
-    });
-  });
-
   container.querySelectorAll('[data-action="view-software"]').forEach(el => {
     el.addEventListener('click', () => {
       state.selectedSoftwareId = el.dataset.id;
@@ -1600,15 +1815,21 @@ function bindSoftwareDetailEvents(sw) {
   });
 
   container.querySelector('[data-action="delete-software"]')?.addEventListener('click', async () => {
-    const ok = await showModal({
+    const typed = await showModal({
       title: 'Delete software entry?',
-      message: `Remove "${sw.name}" from your catalog? Screenshot and license data will be deleted.`,
+      message: `Type the name to delete "${sw.name}". The license key will be destroyed.`,
       confirmText: 'Delete',
-      danger: true
+      danger: true,
+      prompt: true,
+      promptType: 'text',
+      promptPlaceholder: sw.name
     });
-    if (!ok) return;
+    if (typed !== sw.name) {
+      if (typed != null) showToast('Software was not deleted', 'error');
+      return;
+    }
     try {
-      await api.deleteSoftware(sw.id);
+      await api.deleteSoftware(sw.id, { erase: true, confirmName: typed });
       showToast('Software removed', 'success');
       navigate('software');
     } catch (err) { showToast(err.message, 'error'); }
@@ -1667,6 +1888,7 @@ function bindSoftwareDetailEvents(sw) {
 }
 
 function bindSoftwareFormEvents(editSw) {
+  trackUnsavedChanges(document.getElementById('software-form'));
   container.querySelector('[data-action="cancel-software-form"]')?.addEventListener('click', () => {
     if (editSw) navigate('software-detail', { id: editSw.id });
     else navigate('software');
@@ -1684,24 +1906,26 @@ function bindSoftwareFormEvents(editSw) {
     e.target.value = '';
   });
 
-  document.getElementById('software-form')?.addEventListener('submit', async (e) => {
+  document.getElementById('software-form')?.addEventListener('submit', singleFlight(async (e) => {
     e.preventDefault();
     const data = collectSoftwareFormData();
     try {
       if (editSw) {
         await api.updateSoftware(editSw.id, data);
+        state.formDirty = false;
         state.editSoftwareId = null;
         state.selectedSoftwareId = editSw.id;
         showToast('Software updated', 'success');
         navigate('software-detail', { id: editSw.id });
       } else {
         const created = await api.createSoftware(data);
+        state.formDirty = false;
         state.selectedSoftwareId = created.id;
         showToast('Added to catalog — add a screenshot next!', 'success');
         navigate('software-detail', { id: created.id });
       }
     } catch (err) { showToast(err.message, 'error'); }
-  });
+  }));
 }
 
 function bindStudioSetupEvents() {
@@ -1761,7 +1985,7 @@ function bindStudioSetupEvents() {
     });
   });
 
-  document.getElementById('new-rack-form')?.addEventListener('submit', async (e) => {
+  document.getElementById('new-rack-form')?.addEventListener('submit', singleFlight(async (e) => {
     e.preventDefault();
     try {
       await api.createRack({
@@ -1772,9 +1996,9 @@ function bindStudioSetupEvents() {
       showToast('Rack created', 'success');
       navigate('studio-setup');
     } catch (err) { showToast(err.message, 'error'); }
-  });
+  }));
 
-  document.getElementById('new-chain-form')?.addEventListener('submit', async (e) => {
+  document.getElementById('new-chain-form')?.addEventListener('submit', singleFlight(async (e) => {
     e.preventDefault();
     try {
       await api.createSignalChain({
@@ -1785,7 +2009,7 @@ function bindStudioSetupEvents() {
       state.studioTab = 'chains';
       navigate('studio-setup');
     } catch (err) { showToast(err.message, 'error'); }
-  });
+  }));
 
   container.querySelectorAll('[data-action="delete-rack"]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1805,67 +2029,67 @@ function bindStudioSetupEvents() {
     });
   });
 
+  // Each button changes one entry, so edits made meanwhile on another device are kept.
+  const showStudioTab = (tab) => {
+    state.studioTab = tab;
+    return refreshIfShowing('studio-setup');
+  };
+
   container.querySelectorAll('[data-action="rack-add-item"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', singleFlight(async () => {
       const rackId = btn.dataset.rack;
       const select = container.querySelector(`.rack-add-select[data-rack="${rackId}"]`);
       const slotInput = container.querySelector(`.rack-slot-input[data-rack="${rackId}"]`);
       const itemId = select?.value;
       if (!itemId) return showToast('Select an item', 'error');
-      const rack = await api.racks().then(rs => rs.find(r => String(r.id) === String(rackId)));
-      const items = [...(rack?.items || []).map((s, i) => ({
-        item_id: s.id, position: i, slot_label: s.slot_label || ''
-      })), {
-        item_id: Number(itemId),
-        position: (rack?.items?.length || 0),
-        slot_label: slotInput?.value || ''
-      }];
-      await api.setRackItems(rackId, items);
-      showToast('Added to rack', 'success');
-      state.studioTab = 'racks';
-      navigate('studio-setup');
-    });
+      try {
+        await api.addRackItem(rackId, Number(itemId), slotInput?.value || '');
+        showToast('Added to rack', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+        if (err.status !== 409) return; // already there (maybe added on another device): show the latest
+      }
+      await showStudioTab('racks');
+    }));
   });
 
   container.querySelectorAll('[data-action="rack-remove-item"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const rackId = btn.dataset.rack;
-      const removeId = Number(btn.dataset.item);
-      const rack = await api.racks().then(rs => rs.find(r => String(r.id) === String(rackId)));
-      const items = (rack?.items || []).filter(s => s.id !== removeId).map((s, i) => ({
-        item_id: s.id, position: i, slot_label: s.slot_label || ''
-      }));
-      await api.setRackItems(rackId, items);
-      navigate('studio-setup');
-    });
+    btn.addEventListener('click', singleFlight(async () => {
+      try {
+        await api.removeRackItem(btn.dataset.rack, Number(btn.dataset.item));
+      } catch (err) {
+        return showToast(err.message, 'error');
+      }
+      await showStudioTab('racks');
+    }));
   });
 
   container.querySelectorAll('[data-action="chain-add-item"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', singleFlight(async () => {
       const chainId = btn.dataset.chain;
       const select = container.querySelector(`.chain-add-select[data-chain="${chainId}"]`);
       const itemId = select?.value;
       if (!itemId) return showToast('Select an item', 'error');
-      const chain = await api.signalChains().then(cs => cs.find(c => String(c.id) === String(chainId)));
-      const items = [...(chain?.items || []).map((s, i) => ({ item_id: s.id, position: i })), {
-        item_id: Number(itemId), position: (chain?.items?.length || 0)
-      }];
-      await api.setSignalChainItems(chainId, items);
-      showToast('Added to chain', 'success');
-      state.studioTab = 'chains';
-      navigate('studio-setup');
-    });
+      try {
+        await api.addSignalChainItem(chainId, Number(itemId));
+        showToast('Added to chain', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+        if (err.status !== 409) return;
+      }
+      await showStudioTab('chains');
+    }));
   });
 
   container.querySelectorAll('[data-action="chain-remove-item"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const chainId = btn.dataset.chain;
-      const removeId = Number(btn.dataset.item);
-      const chain = await api.signalChains().then(cs => cs.find(c => String(c.id) === String(chainId)));
-      const items = (chain?.items || []).filter(s => s.id !== removeId).map((s, i) => ({ item_id: s.id, position: i }));
-      await api.setSignalChainItems(chainId, items);
-      navigate('studio-setup');
-    });
+    btn.addEventListener('click', singleFlight(async () => {
+      try {
+        await api.removeSignalChainItem(btn.dataset.chain, Number(btn.dataset.item));
+      } catch (err) {
+        return showToast(err.message, 'error');
+      }
+      await showStudioTab('chains');
+    }));
   });
 
   bindFloorplanEvents(state.floorplans);
@@ -1905,6 +2129,8 @@ function bindStudioBrowseEvents() {
 
   root.querySelectorAll('[data-studio-wall]').forEach(btn => {
     btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      btn.disabled = true; // before the first await, so a double click opens one wall view
       try {
         state.floorplans = await api.floorplans();
         const freshFp = (state.floorplans || []).find(f => String(f.id) === String(fpId));
@@ -1913,7 +2139,6 @@ function bindStudioBrowseEvents() {
           return;
         }
         const wallEdge = Number(btn.dataset.studioWall);
-        btn.disabled = true;
         const wallEntry = freshFp.wall_photos?.[wallEdge] || freshFp.wall_photos?.[String(wallEdge)];
         if (!wallEntry?.path) {
           showToast('No wall photo yet — add one in Studio Setup', 'error');
@@ -2024,10 +2249,14 @@ function bindScanLookupEvents() {
     }
     btn.textContent = 'Stop Camera';
     cameraOn = true;
-    stopCameraScan = await startCameraScan(
-      (code) => { cameraOn = false; btn.textContent = 'Start Camera'; runLookup(code); },
-      (msg) => { showToast(msg, 'error'); cameraOn = false; btn.textContent = 'Start Camera'; }
+    stopCameraScan?.(); // never two streams at once
+    const stop = await startCameraScan(
+      (code) => { cameraOn = false; stopCameraScan = null; btn.textContent = 'Start Camera'; runLookup(code); },
+      (msg) => { showToast(msg, 'error'); cameraOn = false; btn.textContent = 'Start Camera'; },
+      () => cameraOn && state.view === 'scan'
     );
+    if (cameraOn && state.view === 'scan') stopCameraScan = stop;
+    else stop?.();
   });
 
   wedgeInput?.focus();
@@ -2055,30 +2284,10 @@ async function openWallCutoutForItem(item, { onDone } = {}) {
     onSave: async (patch) => {
       await api.saveWallCutout(full.id, patch);
       if (full.map_placement?.floorplan_id) {
-        await mergePinUpdates(full.map_placement.floorplan_id, [{ item_id: full.id, ...patch }], fp);
+        await mergePinUpdates(full.map_placement.floorplan_id, [{ item_id: full.id, ...patch }]);
         state.floorplans = await api.floorplans();
       }
       onDone?.();
-    },
-    onToast: showToast
-  });
-}
-
-async function openPhotoHangForPin(fpId, fp, pin) {
-  const item = await api.item(pin.id);
-  openWallPhotoEditor({
-    item,
-    pin,
-    unit: fp.unit || 'ft',
-    onSave: async (patch) => {
-      const pins = buildFullFloorplanPins(fp);
-      const row = pins.find(p => p.item_id === pin.id);
-      if (row) Object.assign(row, { placement: 'wall', wall_display: true, ...patch });
-      else pins.push({ item_id: pin.id, placement: 'wall', wall_display: true, ...patch });
-      await api.setFloorplanItems(fpId, pins);
-      await api.saveWallCutout(pin.id, patch).catch(() => {});
-      state.floorplans = await api.floorplans();
-      showToast('Wall photo updated', 'success');
     },
     onToast: showToast
   });
@@ -2112,34 +2321,11 @@ function openFloorplanWallInline(fp, edge, { setupMode = true, onBack } = {}) {
   });
 }
 
-function buildFullFloorplanPins(fp) {
-  return (fp?.items || []).map(p => ({
-    item_id: p.id,
-    x_pct: p.x_pct,
-    y_pct: p.y_pct,
-    placement: p.placement || 'floor',
-    wall_edge: p.wall_edge,
-    wall_t: p.wall_t,
-    height_ft: p.height_ft,
-    icon_mode: p.icon_mode,
-    wall_photo_path: p.wall_photo_path,
-    photo_width_ft: p.photo_width_ft,
-    photo_height_ft: p.photo_height_ft,
-    rotation_deg: p.rotation_deg || 0,
-    photo_calibration: p.photo_calibration,
-    wall_display: p.wall_display !== false
-  }));
-}
-
-async function mergePinUpdates(fpId, updates, fp) {
-  const floorplan = fp || (state.floorplans || []).find(f => String(f.id) === String(fpId));
-  const pins = buildFullFloorplanPins(floorplan);
-  for (const u of updates) {
-    const row = pins.find(p => p.item_id === u.item_id);
-    if (row) Object.assign(row, u);
-    else pins.push({ item_id: u.item_id, x_pct: 50, y_pct: 50, ...u });
-  }
-  await api.setFloorplanItems(fpId, pins);
+/** Save only the pins that changed; pins placed meanwhile on other devices are kept. */
+async function mergePinUpdates(fpId, updates) {
+  const updated = await api.updateFloorplanItems(fpId, { upsert: updates });
+  syncFloorplanInState(updated);
+  return updated;
 }
 
 async function promptWallRehang(item, placement) {
@@ -2255,11 +2441,13 @@ async function promptImportManualFromInbox(itemId, { itemName = '', onDone } = {
   }
 }
 
-async function runManualWebSearch(itemId, { query = '', itemName = '' } = {}) {
+async function runManualWebSearch(itemId, { query = '', kind = 'all', itemName = '' } = {}) {
   const currentQuery = String(query || '').trim();
+  const currentKind = kind || state.manualFinder?.kind || 'all';
   state.manualFinder = {
     itemId: String(itemId),
     query: currentQuery,
+    kind: currentKind,
     results: [],
     scans: {},
     searched: true,
@@ -2268,11 +2456,12 @@ async function runManualWebSearch(itemId, { query = '', itemName = '' } = {}) {
   if (state.view !== 'manuals') await navigate('manuals');
 
   try {
-    showToast(`Searching manuals${itemName ? ` for ${itemName}` : ''}...`, 'info');
-    const found = await api.findManualsOnline(itemId, currentQuery);
+    showToast(`Looking up documents${itemName ? ` for ${itemName}` : ''}...`, 'info');
+    const found = await api.findManualsOnline(itemId, currentQuery, currentKind);
     state.manualFinder = {
       itemId: String(itemId),
       query: found.query || currentQuery,
+      kind: found.kind || currentKind,
       results: Array.isArray(found.results) ? found.results : [],
       scans: {},
       searched: true,
@@ -2286,6 +2475,7 @@ async function runManualWebSearch(itemId, { query = '', itemName = '' } = {}) {
     };
     showToast(state.manualFinder.error, 'error');
   }
+  if (state.view !== 'manuals') return;
   await navigate('manuals');
   document.getElementById('manual-web-results')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
@@ -2302,6 +2492,7 @@ async function scanManualResultPage(itemId, url) {
         [url]: Array.isArray(found.candidates) ? found.candidates : []
       }
     };
+    if (state.view !== 'manuals') return;
     await navigate('manuals');
     document.getElementById('manual-web-results')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   } catch (err) {
@@ -2309,13 +2500,13 @@ async function scanManualResultPage(itemId, url) {
   }
 }
 
-async function archiveManualResult(itemId, url) {
+async function archiveManualResult(itemId, url, description = '') {
   try {
-    showToast('Saving manual into Studio Inventory...', 'info');
-    await api.archiveManual(itemId, url);
+    showToast('Downloading document onto this item...', 'info');
+    await api.archiveManual(itemId, url, description);
     showToast('Manual saved to this item', 'success');
     state.manualFinder = { itemId: null, query: '', results: [], scans: {}, searched: false, error: '' };
-    await navigate('manuals');
+    await refreshIfShowing('manuals');
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -2529,17 +2720,79 @@ function bindReportEvents() {
 function bindInsuranceEvents() {
   document.getElementById('export-insurance-pdf')?.addEventListener('click', () => {
     const fmt = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-    const rows = state.items.map(i => [
-      i.name, i.brand, i.model, i.serial_number, i.year, i.location,
-      i.condition, fmt(i.purchase_price), fmt(i.replacement_value * i.quantity)
-    ]);
-    const total = state.items.reduce((s, i) => s + i.replacement_value * i.quantity, 0);
-    generatePdf('Insurance Report', ['Name', 'Brand', 'Model', 'Serial', 'Year', 'Location', 'Condition', 'Purchase', 'Replacement'], rows, {
-      count: state.items.length,
+    const tables = insurancePdfTables(state.items, fmt);
+    const total = state.items
+      .filter(i => !['sold', 'stolen', 'destroyed', 'given_away'].includes(i.studio_status))
+      .reduce((s, i) => s + i.replacement_value * i.quantity, 0);
+    generatePdf('Insurance Report', tables.ownedHeaders, tables.ownedRows, {
+      count: tables.ownedRows.length,
       purchase: '',
       replacement: fmt(total)
+    }, {
+      title: 'No longer owned',
+      headers: tables.formerHeaders,
+      rows: tables.formerRows
     });
   });
+}
+
+function bindStopServerEvents() {
+  const button = document.getElementById('app-stop-server');
+  if (!button) return;
+  // Only the studio computer can stop the app.
+  if (!state.ownerAuth?.local) {
+    button.closest('.btn-group')?.nextElementSibling?.remove();
+    button.closest('.btn-group')?.remove();
+    return;
+  }
+  button.addEventListener('click', singleFlight(async () => {
+    const ok = await showModal({
+      title: 'Stop Studio Inventory?',
+      message: 'The app will finish a last backup (if one is due) and close the catalog. Phones and other devices lose access until you start it again.',
+      confirmText: 'Stop',
+      cancelText: 'Keep running'
+    });
+    if (!ok) return;
+    try {
+      await api.shutdown();
+      container.innerHTML = `
+        <div class="empty-state">
+          <h3>Studio Inventory has stopped</h3>
+          <p>You can close this tab. Start it again from the Studio Inventory icon.</p>
+        </div>`;
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }));
+}
+
+function bindServerLogEvents() {
+  const pathEl = document.getElementById('server-log-path');
+  const linesEl = document.getElementById('server-log-lines');
+  const openBtn = document.getElementById('server-log-open');
+  // The folder can only be opened on the studio computer itself.
+  if (openBtn && !state.ownerAuth?.local) openBtn.classList.add('hidden');
+
+  document.getElementById('server-log-show')?.addEventListener('click', singleFlight(async () => {
+    try {
+      const log = await api.serverLog();
+      if (pathEl) pathEl.textContent = log.path ? `Log file: ${log.path}` : 'No log file is being written.';
+      linesEl.textContent = log.lines?.length ? log.lines.join('\n') : 'The log is empty.';
+      linesEl.classList.remove('hidden');
+      linesEl.scrollTop = linesEl.scrollHeight;
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }));
+
+  openBtn?.addEventListener('click', singleFlight(async () => {
+    try {
+      const result = await api.openServerLog();
+      if (pathEl) pathEl.textContent = `Log file: ${result.path}`;
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }));
 }
 
 function bindBackupEvents() {
@@ -2575,7 +2828,7 @@ function bindBackupEvents() {
     }
   });
 
-  document.getElementById('guest-regenerate')?.addEventListener('click', async () => {
+  document.getElementById('guest-regenerate')?.addEventListener('click', singleFlight(async () => {
     const ok = await showModal({
       title: 'Regenerate Guest Token?',
       message: 'The old link will stop working. Anyone using the previous URL will need the new one.',
@@ -2590,7 +2843,7 @@ function bindBackupEvents() {
     } catch (err) {
       showToast(err.message, 'error');
     }
-  });
+  }));
 
   setGuestSectionState(guestEnabledCheck?.checked);
 
@@ -2608,27 +2861,104 @@ function bindBackupEvents() {
       await api.setupOwnerPin(pin);
       state.ownerAuth = await api.authStatus();
       showToast('Owner PIN saved', 'success');
-      navigate('backup');
+      refreshIfShowing('backup');
     } catch (err) {
       showToast(err.message, 'error');
     }
   });
 
+  document.getElementById('backup-folder-save')?.addEventListener('click', async () => {
+    const dir = document.getElementById('backup-folder-path')?.value || '';
+    const status = document.getElementById('backup-folder-status');
+    try {
+      const saved = await api.setBackupFolder(dir);
+      if (status) status.textContent = `Backup folder saved. ${saved.dir}`;
+      showToast('Backup folder saved', 'success');
+    } catch (err) {
+      if (status) status.textContent = err.message;
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-recovery-confirm')?.addEventListener('click', async () => {
+    try {
+      await api.confirmRecoveryKey(document.getElementById('backup-recovery-type')?.value || '');
+      showToast('Recovery key confirmed', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-move-leftovers')?.addEventListener('click', async () => {
+    try {
+      await api.moveBackupLeftovers();
+      showToast('Leftover files moved to the backup folder', 'success');
+      refreshIfShowing('backup');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-encrypt')?.addEventListener('click', singleFlight(async () => {
+    try {
+      await api.encryptCatalog();
+      showToast('Catalog encrypted', 'success');
+      refreshIfShowing('backup');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }));
+
+  document.getElementById('backup-recovery-show')?.addEventListener('click', async () => {
+    const box = document.getElementById('backup-recovery-key');
+    try {
+      const result = await api.recoveryKey();
+      if (box) {
+        box.hidden = false;
+        box.value = result.recoveryKey || '';
+      }
+      showToast('Recovery key is visible on this page only', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('backup-recovery-copy')?.addEventListener('click', singleFlight(async () => {
+    const status = document.getElementById('backup-folder-status');
+    try {
+      const result = await api.refreshRecoveryCopy();
+      if (status) status.textContent = result.recoveryReady ? 'Recovery ZIP is in the backup folder.' : 'Recovery copy was not written.';
+      showToast('Recovery copy written', 'success');
+    } catch (err) {
+      if (status) status.textContent = err.message;
+      showToast(err.message, 'error');
+    }
+  }));
+
+  document.getElementById('backup-folder-run')?.addEventListener('click', singleFlight(async () => {
+    const status = document.getElementById('backup-folder-status');
+    try {
+      const result = await api.runFolderBackup();
+      if (status) status.textContent = `Last folder backup: ${result.lastAt || 'just now'}`;
+      showToast('Folder backup written', 'success');
+    } catch (err) {
+      if (status) status.textContent = err.message;
+      showToast(err.message, 'error');
+    }
+  }));
+
   document.getElementById('backup-export-full')?.addEventListener('click', () => {
     api.exportFullBackup();
-    localStorage.setItem('lastBackup', String(Date.now()));
-    showToast('Full backup exported', 'success');
+    showToast('Full backup download started', 'success');
   });
 
   document.getElementById('backup-export-json')?.addEventListener('click', () => {
     api.exportJson();
-    localStorage.setItem('lastBackup', String(Date.now()));
-    showToast('JSON exported', 'success');
+    showToast('JSON export started — check your downloads', 'info');
   });
   document.getElementById('backup-export-sql')?.addEventListener('click', () => {
     api.exportSql();
-    localStorage.setItem('lastBackup', String(Date.now()));
-    showToast('SQL dump exported', 'success');
+    showToast('SQL export started — check your downloads', 'info');
   });
   document.getElementById('backup-export-csv')?.addEventListener('click', () => api.exportCsv());
 
@@ -2697,22 +3027,35 @@ function bindBackupEvents() {
       const text = await file.text();
       const data = JSON.parse(text);
       const replace = document.getElementById('import-replace').checked;
+      let confirmPhrase = '';
       if (replace) {
-        const ok = await showModal({
-          title: 'Replace Inventory Catalog?',
-          message: 'This replaces inventory catalog records with the JSON import. Use a Full Backup ZIP when you also need to restore media and studio layouts. Continue?',
-          confirmText: 'Replace Catalog',
-          danger: true
+        const typed = await showModal({
+          title: 'Replace inventory catalog?',
+          message: 'This deletes every item, the value history, and the edit log. Type replace the catalog to continue.',
+          confirmText: 'Replace catalog',
+          danger: true,
+          prompt: true,
+          promptType: 'text',
+          promptPlaceholder: 'replace the catalog'
         });
-        if (!ok) return;
+        if (typed !== 'replace the catalog') {
+          showToast('Catalog was not replaced', 'error');
+          e.target.value = '';
+          return;
+        }
+        confirmPhrase = typed;
       }
-      const result = await api.importJson(data, replace);
-      document.getElementById('import-status').textContent = `Imported ${result.imported} items successfully.`;
+      const result = await api.importJson(data, replace, confirmPhrase);
+      const status = document.getElementById('import-status');
+      if (status) status.textContent = `Imported ${result.imported} items successfully.`;
       showToast(`Imported ${result.imported} items`, 'success');
-      navigate('dashboard');
+      if (state.view === 'backup') navigate('dashboard');
     } catch (err) {
-      document.getElementById('import-status').textContent = `Error: ${err.message}`;
+      const status = document.getElementById('import-status');
+      if (status) status.textContent = `Error: ${err.message}`;
       showToast(err.message, 'error');
+    } finally {
+      e.target.value = ''; // so the same file can be chosen again
     }
   });
 }
@@ -2738,15 +3081,31 @@ function registerServiceWorker() {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!reloadForControllerUpdate) return;
     if (sessionStorage.getItem('sw-reload') === '1') return;
+    // Never throw away a half-filled form: tell the user instead.
+    if (['item-form', 'software-form'].includes(state.view)) {
+      showToast('Studio Inventory was updated. Save your changes, then reload the page.', 'info');
+      return;
+    }
     sessionStorage.setItem('sw-reload', '1');
     window.location.reload();
   });
+  // The flag only stops a reload loop; once this page has settled, later updates may reload again.
+  setTimeout(() => {
+    try { sessionStorage.removeItem('sw-reload'); } catch { /* storage blocked */ }
+  }, 10000);
 }
 
 document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-print-page]')) {
+    window.print();
+    return;
+  }
+  // The one handler for every [data-nav] button, so each click navigates exactly once.
   const nav = e.target.closest('[data-nav]');
-  if (nav && !nav.closest('form')) {
+  if (nav && !nav.matches('[type="submit"]')) {
     e.preventDefault();
+    if (nav.dataset.nav === 'software-form') state.editSoftwareId = null;
+    if (nav.dataset.nav === 'item-form') state.editItemId = null;
     navigate(nav.dataset.nav);
   }
 });

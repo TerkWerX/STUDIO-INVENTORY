@@ -77,7 +77,13 @@ export function renderScanResult(result) {
   `;
 }
 
-export async function startCameraScan(onCode, onError) {
+/**
+ * Start the camera and call onCode with the first barcode seen. Returns a stop
+ * function, or null when the camera could not start. isWanted() is checked
+ * after the permission prompt: if the user has left or pressed Stop meanwhile,
+ * the camera is released straight away instead of running unseen.
+ */
+export async function startCameraScan(onCode, onError, isWanted = () => true) {
   if (!window.isSecureContext) {
     onError('Live camera scanning requires HTTPS. Use “Take a Label Photo” instead on this local-network link.');
     return null;
@@ -105,8 +111,23 @@ export async function startCameraScan(onCode, onError) {
     return null;
   }
 
+  const release = () => {
+    stream.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+    wrap?.classList.add('hidden');
+  };
+  if (!isWanted() || !video.isConnected) {
+    release();
+    return null;
+  }
   video.srcObject = stream;
-  await video.play();
+  try {
+    await video.play();
+  } catch (err) {
+    release();
+    onError(err.message || 'The camera could not start');
+    return null;
+  }
   wrap?.classList.remove('hidden');
 
   const detector = new BarcodeDetector({
@@ -123,6 +144,7 @@ export async function startCameraScan(onCode, onError) {
       const codes = await detector.detect(video);
       if (codes.length) {
         active = false;
+        release(); // turn the camera off as soon as a code is read
         onCode(codes[0].rawValue);
         return;
       }
@@ -133,8 +155,6 @@ export async function startCameraScan(onCode, onError) {
 
   return () => {
     active = false;
-    stream.getTracks().forEach(t => t.stop());
-    video.srcObject = null;
-    wrap?.classList.add('hidden');
+    release();
   };
 }

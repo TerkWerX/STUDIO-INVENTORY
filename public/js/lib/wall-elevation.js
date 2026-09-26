@@ -648,9 +648,8 @@ export function openWallElevation({
   });
 
   overlay.querySelectorAll('.wall-elevation-close').forEach(btn => btn.addEventListener('click', close));
-  if (!useInline) {
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  }
+  // Assigned, not added: the overlay is reused, and each open replaces the previous handler.
+  overlay.onclick = useInline ? null : (e) => { if (e.target === overlay) close(); };
 
   const pointers = new Map();
   let panning = false;

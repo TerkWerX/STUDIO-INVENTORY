@@ -118,8 +118,27 @@ export function buildOwnerLabelXml(item, options = {}) {
 let dymoLoadPromise = null;
 const DYMO_LOAD_TIMEOUT_MS = 6000;
 
+// DYMO's framework is the one script this app loads from another origin, so it is
+// off until the owner turns it on. While it is off the server leaves that origin out
+// of script-src, and the browser would refuse the script anyway; failing here keeps
+// the Labels page honest about why, instead of waiting for a blocked request.
+export const DYMO_OFF_MESSAGE = 'DYMO label printing is off. Turn it on in Label Settings to load DYMO Connect.';
+let dymoEnabled = false;
+let dymoScriptUrl = 'https://qajavascriptsdktests.azurewebsites.net/JavaScript/dymo.connect.framework.js';
+
+/** Told by the Labels page from the server's saved setting, before anything loads. */
+export function setDymoEnabled(enabled, scriptOrigin = '') {
+  dymoEnabled = !!enabled;
+  if (scriptOrigin) dymoScriptUrl = `${String(scriptOrigin).replace(/\/$/, '')}/JavaScript/dymo.connect.framework.js`;
+}
+
+export function isDymoEnabled() {
+  return dymoEnabled;
+}
+
 export function loadDymoFramework() {
   if (window.dymo?.label?.framework) return Promise.resolve(window.dymo.label.framework);
+  if (!dymoEnabled) return Promise.reject(new Error(DYMO_OFF_MESSAGE));
   if (dymoLoadPromise) return dymoLoadPromise;
 
   dymoLoadPromise = new Promise((resolve, reject) => {
@@ -131,7 +150,7 @@ export function loadDymoFramework() {
       script.remove();
       reject(err);
     };
-    script.src = 'https://qajavascriptsdktests.azurewebsites.net/JavaScript/dymo.connect.framework.js';
+    script.src = dymoScriptUrl;
     script.onload = () => {
       clearTimeout(timer);
       const fw = window.dymo?.label?.framework;
@@ -159,6 +178,7 @@ export async function getDymoStatus() {
       names.push(typeof p === 'string' ? p : p.name);
     }
     return {
+      enabled: true,
       available: true,
       isBrowserSupported: env.isBrowserSupported !== false,
       isFrameworkInstalled: env.isFrameworkInstalled !== false,
@@ -166,7 +186,7 @@ export async function getDymoStatus() {
       printers: names.filter(Boolean)
     };
   } catch (err) {
-    return { available: false, error: err.message, printers: [] };
+    return { enabled: dymoEnabled, available: false, error: err.message, printers: [] };
   }
 }
 

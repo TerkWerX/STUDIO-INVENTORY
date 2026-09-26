@@ -31,7 +31,7 @@ import {
   renderSoftwareCatalog, renderSoftwareDetail, renderSoftwareForm, collectSoftwareFormData
 } from './views/software.js';
 import { printBinderDocument, printBinderItems, openManualForPrint } from './lib/binder-print.js';
-import { getDymoStatus } from './lib/dymo-labels.js';
+import { getDymoStatus, setDymoEnabled } from './lib/dymo-labels.js';
 import { loadLabelSettings } from './lib/label-settings.js';
 
 const state = {
@@ -640,8 +640,11 @@ async function navigate(view, params = {}) {
         break;
       }
 
-      case 'labels':
+      case 'labels': {
         state.items = await api.items({ sort: 'name' });
+        // Tell the DYMO module what the owner allowed before anything tries to load it.
+        const dymoSettings = await api.dymoSettings().catch(() => ({ enabled: false, scriptOrigin: '' }));
+        setDymoEnabled(dymoSettings.enabled, dymoSettings.scriptOrigin);
         const dymoStatus = await getDymoStatus();
         const labelSettings = loadLabelSettings();
         if (!labelSettings.baseUrl) labelSettings.baseUrl = window.location.origin;
@@ -650,10 +653,12 @@ async function navigate(view, params = {}) {
           items: state.items,
           onToast: showToast,
           onGetScanUrl: async (itemId, baseUrl) => (await api.scanLink(itemId, baseUrl)).url,
+          onSetDymoEnabled: (enabled) => api.updateDymoSettings(enabled),
           // DYMO printers are listed when the page opens; nothing to refresh on focus.
         });
         state.labelPreselectId = null;
         break;
+      }
 
       case 'binder':
         state.items = await api.items({ sort: 'name' });

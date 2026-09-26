@@ -157,6 +157,14 @@ function brandLogoLookupsEnabled() {
   try { return !!readSettings().brandLogoLookups; } catch { return false; }
 }
 
+// DYMO publishes its Connect framework from this host. It is a third party, so
+// the page is only allowed to load it once the owner turns label printing on.
+const DYMO_SCRIPT_ORIGIN = 'https://qajavascriptsdktests.azurewebsites.net';
+
+function dymoLabelPrintingEnabled() {
+  try { return !!readSettings().dymoLabelPrinting; } catch { return false; }
+}
+
 // Give brands without a logo one at startup. Online lookups only when the owner
 // has turned them on; otherwise a local text badge, and nothing leaves this computer.
 setTimeout(() => {
@@ -197,9 +205,11 @@ app.use((_req, res, next) => {
   res.setHeader('Permissions-Policy', 'camera=(self)');
   // script-src has no 'unsafe-inline': injected <script>, onerror="…" and javascript: links
   // cannot run even if some text slips through unescaped. The DYMO Connect framework is
-  // the one third-party script (loaded only when printing to a DYMO LabelWriter).
+  // the one third-party script, and it is only allowed once the owner has turned on
+  // DYMO label printing — every other install runs on 'self' alone.
+  const scriptSrc = dymoLabelPrintingEnabled() ? `'self' ${DYMO_SCRIPT_ORIGIN}` : "'self'";
   res.setHeader('Content-Security-Policy', [
-    "script-src 'self' https://qajavascriptsdktests.azurewebsites.net",
+    `script-src ${scriptSrc}`,
     "frame-ancestors 'self'",
     "base-uri 'self'",
     "object-src 'none'",
@@ -1268,6 +1278,17 @@ app.get('/api/settings/brand-logos', (_req, res) => {
 app.put('/api/settings/brand-logos', (req, res) => {
   const settings = writeSettings({ brandLogoLookups: req.body?.lookups === true });
   res.json({ lookups: !!settings.brandLogoLookups });
+});
+
+app.get('/api/settings/dymo', (_req, res) => {
+  res.json({ enabled: dymoLabelPrintingEnabled(), scriptOrigin: DYMO_SCRIPT_ORIGIN });
+});
+
+// Turning this on widens the page's script-src, so the new policy only reaches the
+// browser on the next page load. The Labels page reloads itself after saving.
+app.put('/api/settings/dymo', (req, res) => {
+  const settings = writeSettings({ dymoLabelPrinting: req.body?.enabled === true });
+  res.json({ enabled: !!settings.dymoLabelPrinting, scriptOrigin: DYMO_SCRIPT_ORIGIN });
 });
 
 app.get('/api/guest/:token/health', guestMiddleware, (_req, res) => {

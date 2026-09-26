@@ -11,7 +11,17 @@ const path = require('path');
 const zlib = require('zlib');
 
 const { safeFetch, isPrivateAddress } = require('../lib/safe-fetch');
-const { extractPdfText } = require('../lib/pdf-index');
+const { extractPdfText, pdfParseAvailable } = require('../lib/pdf-index');
+
+// Without unpdf, extractPdfText() returns '' for every file. A bomb test alone would
+// then pass while testing nothing, so these are skipped outright rather than faked,
+// and the bomb test proves the parser is really running before trusting its ''.
+const NEEDS_PDF = pdfParseAvailable ? false : 'needs the unpdf package (run npm ci)';
+const GOOD_PDF_TEXT = 'Phantom power calibration';
+
+function writeTextPdf(file, text) {
+  fs.writeFileSync(file, pdfWithContent(`BT /F1 12 Tf 72 720 Td (${text}) Tj ET`, { compressed: true }));
+}
 
 function startServer(handler) {
   return new Promise((resolve) => {
@@ -161,16 +171,24 @@ function pdfWithContent(contentStream, { compressed = false } = {}) {
   return Buffer.concat(parts);
 }
 
-test('PDF text is extracted off the main thread', async () => {
+test('PDF text is extracted off the main thread', { skip: NEEDS_PDF }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-pdf-test-'));
   const file = path.join(dir, 'manual.pdf');
-  fs.writeFileSync(file, pdfWithContent('BT /F1 12 Tf 72 720 Td (Phantom power calibration) Tj ET', { compressed: true }));
-  assert.equal(await extractPdfText(file), 'Phantom power calibration');
+  writeTextPdf(file, GOOD_PDF_TEXT);
+  assert.equal(await extractPdfText(file), GOOD_PDF_TEXT);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('a PDF decompression bomb is skipped quickly without blocking the server', async () => {
+test('a PDF decompression bomb is skipped quickly without blocking the server', { skip: NEEDS_PDF }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-pdf-test-'));
+
+  // Control first: an empty result only means "the bomb was refused" if this
+  // same call path returns real text for an ordinary PDF.
+  const control = path.join(dir, 'control.pdf');
+  writeTextPdf(control, GOOD_PDF_TEXT);
+  assert.equal(await extractPdfText(control), GOOD_PDF_TEXT,
+    'PDF extraction is not working, so an empty bomb result would prove nothing');
+
   const file = path.join(dir, 'bomb.pdf');
   // About 1 MB on disk that would inflate to 200 MB of page content.
   const line = 'BT /F1 12 Tf 72 720 Td (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA) Tj ET\n';

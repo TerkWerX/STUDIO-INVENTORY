@@ -15,7 +15,9 @@ export function renderLabelsPage(items, settings, dymoStatus, preselectedId = nu
   const statusClass = dymoOk ? 'status-on' : 'status-off';
   const statusText = dymoOk
     ? `DYMO ready — ${dymoStatus.printers.length} printer(s) found`
-    : (dymoStatus.error || 'DYMO Connect not detected — use browser print fallback');
+    : dymoStatus.enabled
+      ? (dymoStatus.error || 'DYMO Connect not detected — use browser print fallback')
+      : 'DYMO printing is off — browser print fallback is still available';
 
   return `
     <h2 class="page-title">Owner Labels</h2>
@@ -46,6 +48,13 @@ export function renderLabelsPage(items, settings, dymoStatus, preselectedId = nu
           <p class="${statusClass}" style="margin-top:0.5rem">${escapeHtml(statusText)}</p>
         </div>
       </div>
+      <label class="toggle-label" style="margin-top:0.75rem">
+        <input type="checkbox" id="dymo-enabled" ${dymoStatus.enabled ? 'checked' : ''}>
+        <span>Use a DYMO LabelWriter
+          <br><span class="text-muted-sm">Loads DYMO's Connect framework from dymo.com's hosting. Off keeps every script on this
+          computer, and "Print Selected (Browser)" still prints the same labels.</span>
+        </span>
+      </label>
       <p class="text-muted-sm label-dymo-note">
         Requires <strong>DYMO Connect</strong> (or DYMO Label software) with your LabelWriter 450 Turbo connected.
         <a href="https://www.dymo.com/support" target="_blank" rel="noopener">DYMO support</a>
@@ -114,7 +123,20 @@ export function getSelectedLabelItems(allItems) {
   return allItems.filter(i => ids.has(String(i.id)));
 }
 
-export function bindLabelsPageEvents({ items, onToast, onRefreshStatus, onGetScanUrl }) {
+export function bindLabelsPageEvents({ items, onToast, onRefreshStatus, onGetScanUrl, onSetDymoEnabled }) {
+  document.getElementById('dymo-enabled')?.addEventListener('change', async (e) => {
+    const wanted = e.target.checked;
+    try {
+      // script-src is sent with the page, so the new policy only applies after a reload.
+      await onSetDymoEnabled(wanted);
+      onToast(wanted ? 'DYMO printing on — reloading' : 'DYMO printing off — reloading', 'success');
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      e.target.checked = !wanted;
+      onToast(err.message, 'error');
+    }
+  });
+
   const resolveScanUrl = async (itemId, baseUrl) => onGetScanUrl
     ? onGetScanUrl(itemId, baseUrl)
     : getScanUrl(itemId, baseUrl);

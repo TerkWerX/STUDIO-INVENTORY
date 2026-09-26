@@ -325,6 +325,12 @@ async function main() {
     const page = await request('/', { remote: false });
     const csp = String(page.headers['content-security-policy'] || '');
     assert(/script-src 'self'/.test(csp) && !/unsafe-inline|unsafe-eval/.test(csp), `weak Content-Security-Policy: ${csp}`);
+    // A fresh install loads no third-party script. DYMO's framework is the only one
+    // that may be added, and only after the owner turns on DYMO label printing.
+    const scriptSrc = (csp.split(';').find(part => part.trim().startsWith('script-src')) || '').trim();
+    assert(!/https?:\/\//.test(scriptSrc), `script-src allows a third-party origin by default: ${scriptSrc}`);
+    const dymoOff = await request('/api/settings/dymo', { headers: { Cookie: cookieOne } });
+    assert(dymoOff.json?.enabled === false, 'DYMO label printing must be off on a new install');
     const pdf = multipartFile({
       field: 'file',
       filename: 'hostile-manual.pdf',

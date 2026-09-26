@@ -22,6 +22,7 @@ The first time you open the app after updating, the page reloads once to pick up
 - Guest links show less: no purchase prices, receipts, private notes or borrower details.
 - Downloading a manual or installer "from a URL" refuses addresses on your own computer or local network, follows redirects carefully, and enforces size limits and timeouts.
 - PDF manuals are indexed in a separate worker with memory and time limits, so a broken or hostile PDF can't stall the app.
+- DYMO label printing is now opt-in. DYMO's Connect framework is the one script the app loads from another computer, and it was allowed on every page whether or not you owned a LabelWriter. A new install now runs entirely on its own scripts.
 - Dependencies updated (Express 4.22, Multer 2). PDF text extraction moved to `unpdf`. `npm audit` reports no known vulnerabilities.
 
 ### Reliability
@@ -52,6 +53,7 @@ The first time you open the app after updating, the page reloads once to pick up
 | Brand logos | Looked up online automatically | Off by default. Turn on in **Brands → Look up logos online for new brands**. Clearbit removed. |
 | Download from a local address (NAS, router) | Allowed | Refused. Set `STUDIO_ALLOW_PRIVATE_DOWNLOADS=1` to allow. |
 | Running from source | Node.js 18+ | Node.js 22+ (release downloads include the right runtime) |
+| DYMO label printing | Always loaded DYMO's framework | Off by default. Turn on **Owner Labels → Use a DYMO LabelWriter**; the page reloads once. **Print Selected (Browser)** is unchanged and needs nothing. |
 
 ### macOS
 

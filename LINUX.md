@@ -17,7 +17,7 @@ cd studio-inventory-linux
 ./Start\ Studio\ Inventory.sh
 ```
 
-The launcher opens `http://localhost:3847` with `xdg-open` when available. Press `Ctrl+C` in the terminal to stop the server.
+The launcher opens `http://localhost:3847` with `xdg-open` when available. To stop the app, use **Help & About → Stop Studio Inventory** in the app, which closes the catalog cleanly, or press `Ctrl+C` in the terminal.
 
 ## Install for your user
 
@@ -42,7 +42,7 @@ If `~/.local/bin` is not already on your `PATH`, start the app from the applicat
 
 ## Updating
 
-Download and extract the newer release, stop any running Studio Inventory server, and run its installer again. The installer backs up and restores the existing `data/` directory while replacing application files.
+Download and extract the newer release, stop any running Studio Inventory server (**Help & About → Stop Studio Inventory**), and run its installer again. The installer backs up and restores the existing `data/` directory while replacing application files.
 
 For an additional safety copy, use **Backup & Restore → Full Backup ZIP** before updating.
 

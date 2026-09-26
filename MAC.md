@@ -139,7 +139,7 @@ You should see something like:
 Studio Inventory running at http://localhost:3847
 ```
 
-Leave this Terminal window **open** while you use the app. Press **Ctrl+C** in Terminal to stop the server.
+Leave this Terminal window **open** while you use the app. To stop it, use **Help & About → Stop Studio Inventory** in the app, which closes the catalog cleanly, or press **Ctrl+C** in Terminal.
 
 ### Step 5 — Open the app
 
@@ -167,7 +167,7 @@ chmod +x start-studio-inventory.sh   # only needed once
 | Task | How |
 |------|-----|
 | **Start** | Open Terminal → `cd` to project folder → `npm start` |
-| **Stop** | Press **Ctrl+C** in the Terminal window running the server |
+| **Stop** | **Help & About → Stop Studio Inventory** in the app (closes the catalog cleanly), or **Ctrl+C** in the Terminal window running the server |
 | **Fullscreen** | **Control+Command+F** in Safari, or browser fullscreen |
 | **New item** | **⌘N** |
 | **Search inventory** | **⌘F** (on Inventory page) |

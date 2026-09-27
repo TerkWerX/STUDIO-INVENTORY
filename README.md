@@ -67,7 +67,14 @@ Electronic drum kit
 
 Every record can keep its own price, receipt, photos, specifications, and compatibility result. Parent records show the complete assembly value.
 
-## What's new in 2.9.1
+## What's new in 2.9.2
+
+- **The app has its own icon** on the desktop, in the Start menu and on the browser tab. The Windows launcher and installer previously shipped without one.
+- **Stopping the app is easier to find.** **Help & About** now opens with a **Stop Studio Inventory** button, because closing the browser tab leaves the server running.
+
+Nothing about your catalog changes and there is nothing to read before updating: **[2.9.2 release notes](docs/RELEASE-v2.9.2.md)**.
+
+### 2.9.1
 
 A security and reliability release; nothing about how you catalog gear changed.
 

@@ -1,6 +1,6 @@
 {
   "name": "studio-inventory",
-  "version": "2.9.1",
+  "version": "2.9.2",
   "description": "Local-first inventory and studio planning for musical instruments, audio equipment, documents, accessories, and software",
   "main": "server.js",
   "author": "TerkWerX",

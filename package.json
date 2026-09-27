@@ -25,7 +25,8 @@
     "test:api": "node scripts/smoke-test.js && node scripts/api-smoke-test.js",
     "test:browser": "node scripts/browser-smoke-test.js",
     "postinstall": "node scripts/ensure-playwright.js",
-    "screenshots": "node scripts/capture-screenshots.js"
+    "screenshots": "node scripts/capture-screenshots.js",
+    "build:icon": "node scripts/build-icon.js"
   },
   "keywords": [
     "inventory",

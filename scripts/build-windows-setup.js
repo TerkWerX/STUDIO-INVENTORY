@@ -554,6 +554,8 @@ function compileInstallerStub(stubExe) {
   fs.writeFileSync(sourceFile, installerSource(), 'utf8');
 
   try {
+    // Same icon as the launchers, so setup and the installed app match.
+    const icon = path.join(__dirname, '..', 'branding', 'icon.ico');
     run(csc, [
       '/nologo',
       '/target:winexe',
@@ -561,6 +563,7 @@ function compileInstallerStub(stubExe) {
       '/reference:System.Drawing.dll',
       '/reference:System.IO.Compression.dll',
       '/reference:System.IO.Compression.FileSystem.dll',
+      ...(fs.existsSync(icon) ? [`/win32icon:${icon}`] : []),
       `/out:${stubExe}`,
       sourceFile,
     ]);

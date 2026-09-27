@@ -433,13 +433,18 @@ ${SAFE_REPLACE_CS}
 }
 `, 'utf8');
 
+  // Without /win32icon the launcher ships Windows' default EXE icon, which is
+  // what the desktop and Start menu shortcuts then inherit.
+  const icon = path.join(ROOT, 'branding', 'icon.ico');
   const result = spawnSync(csc, [
     '/nologo',
     '/target:winexe',
     '/reference:System.Windows.Forms.dll',
+    ...(fs.existsSync(icon) ? [`/win32icon:${icon}`] : []),
     `/out:${exe}`,
     src,
   ], { stdio: 'inherit' });
+  if (!fs.existsSync(icon)) console.warn('  no branding/icon.ico - launchers will use the default Windows icon');
   if (result.status !== 0) throw new Error('Failed to compile Windows launcher EXE.');
 
   fs.copyFileSync(exe, path.join(outRoot, 'Studio Inventory.exe'));

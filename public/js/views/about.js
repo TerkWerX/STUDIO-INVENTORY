@@ -5,6 +5,19 @@ export function renderAbout() {
     <h2 class="page-title">Help &amp; About</h2>
     <p class="page-subtitle">Studio Inventory <span id="about-app-version"></span> — Local music gear management</p>
 
+    <div class="card" id="stop-server-card">
+      <h3 class="section-title">Stopping Studio Inventory</h3>
+      <p style="color:var(--text-secondary);line-height:1.8">
+        Closing this browser tab does not stop the app — it keeps running on the studio computer so phones and tablets can still reach it.
+        Use the button below to stop it properly: it finishes a last backup if one is due and closes the catalog cleanly.
+        On Windows there is also a <strong>Stop Studio Inventory</strong> entry in the Start menu.
+      </p>
+      <div class="btn-group" style="margin-top:0.75rem">
+        <button type="button" class="btn btn-secondary" id="app-stop-server">Stop Studio Inventory</button>
+      </div>
+      <p class="text-muted-sm" style="margin-top:0.5rem">Stops the app on the studio computer. Phones and other devices lose access until it is started again.</p>
+    </div>
+
     <div class="card">
       <h3 class="section-title">Getting Started</h3>
       <p style="margin-bottom:1rem;color:var(--text-secondary)">
@@ -107,7 +120,7 @@ export function renderAbout() {
       <details style="margin-top:0.75rem">
         <summary>Stopping the server and updating portable copies</summary>
         <p style="color:var(--text-secondary);line-height:1.8;margin-top:0.75rem">
-          Use <strong>Stop Studio Inventory</strong> below, or on Windows the <strong>Stop Studio Inventory</strong> entry in the Start menu.
+          Use <strong>Stopping Studio Inventory</strong> at the top of this page, or on Windows the <strong>Stop Studio Inventory</strong> entry in the Start menu.
           If you started the app in a terminal, pressing Ctrl+C there works too. Each of these finishes a last backup and closes the catalog properly.
           For a portable copy, extract the new portable package into a new folder and copy your complete <code>data/</code>
           folder into it while both copies are stopped. Keep the old folder until you have verified the new copy.
@@ -126,10 +139,7 @@ export function renderAbout() {
         From phones on the same Wi‑Fi, use <code style="background:var(--bg-tertiary);padding:0.2rem 0.5rem;border-radius:4px">http://&lt;your-computer-ip&gt;:3847</code>.
         Keyboard shortcuts use Ctrl on Windows or ⌘ Cmd on Mac.
       </p>
-      <div class="btn-group" style="margin-top:0.75rem">
-        <button type="button" class="btn btn-secondary" id="app-stop-server">Stop Studio Inventory</button>
-      </div>
-      <p class="text-muted-sm" style="margin-top:0.5rem">Stops the app on the studio computer. Phones and other devices lose access until it is started again.</p>
+      <p class="text-muted-sm" style="margin-top:0.5rem">To stop it again, see <strong>Stopping Studio Inventory</strong> at the top of this page.</p>
     </div>
 
     <div class="card">
